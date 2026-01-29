@@ -10,7 +10,6 @@ import {
   Req,
   Param,
   Logger,
-  UseGuards,
 } from '@nestjs/common';
 import { Request } from 'express';
 import { UsersService } from './users.service';
@@ -18,9 +17,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { FindAllDto } from './dto/find-all-user.dto';
 import { FindAllUsersResponseDto } from './dto/find-all-user-response.dto';
 import { User } from './entities/user.entity';
-import { RateLimitGuard } from '../../guard/rate-limit.guard';
 
-@UseGuards(RateLimitGuard)
 @Controller('users')
 export class UsersController {
   private readonly logger = new Logger(UsersController.name);
