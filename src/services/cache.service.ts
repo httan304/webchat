@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Inject } from '@nestjs/common';
+import { REDIS_CLIENT } from '@/infrastructure/redis/redis.provider';
 import { Cache } from 'cache-manager';
+import {Redis} from "ioredis";
 
 interface CacheStats {
     hits: number;
@@ -24,7 +26,8 @@ export class CacheService {
         hitRate: '0.00%',
     };
 
-    constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
+    constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache,  @Inject('REDIS_CLIENT') private readonly redis: Redis,
+    ) {}
 
     /**
      * Get value from cache
@@ -37,18 +40,18 @@ export class CacheService {
                 this.stats.hits += 1;
                 this.stats.total = this.stats.hits + this.stats.misses;
                 this.updateHitRate();
-                this.logger.debug(`✅ Cache HIT: ${key}`);
+                this.logger.debug(`âœ… Cache HIT: ${key}`);
                 return value;
             }
 
             this.stats.misses += 1;
             this.stats.total = this.stats.hits + this.stats.misses;
             this.updateHitRate();
-            this.logger.debug(`❌ Cache MISS: ${key}`);
+            this.logger.debug(`âŒ Cache MISS: ${key}`);
             return null;
         } catch (error) {
             this.logger.error(
-                `Cache get error for key ${key}: ${(error as Error).message}`,
+              `Cache get error for key ${key}: ${(error as Error).message}`,
             );
             return null;
         }
@@ -64,7 +67,7 @@ export class CacheService {
             this.logger.debug(`Cache SET: ${key} (TTL: ${ttl}s)`);
         } catch (error) {
             this.logger.error(
-                `Cache set error for key ${key}: ${(error as Error).message}`,
+              `Cache set error for key ${key}: ${(error as Error).message}`,
             );
         }
     }
@@ -73,9 +76,9 @@ export class CacheService {
      * Get from cache or call factory function to populate
      */
     async getOrSet<T>(
-        key: string,
-        factory: () => Promise<T>,
-        ttl: number = 300,
+      key: string,
+      factory: () => Promise<T>,
+      ttl: number = 300,
     ): Promise<T> {
         try {
             const cached = await this.get<T>(key);
@@ -90,7 +93,7 @@ export class CacheService {
             return value;
         } catch (error) {
             this.logger.error(
-                `Get or set error for key ${key}: ${(error as Error).message}`,
+              `Get or set error for key ${key}: ${(error as Error).message}`,
             );
             throw error;
         }
@@ -106,7 +109,7 @@ export class CacheService {
             this.logger.debug(`Cache DELETE: ${key}`);
         } catch (error) {
             this.logger.error(
-                `Cache delete error for key ${key}: ${(error as Error).message}`,
+              `Cache delete error for key ${key}: ${(error as Error).message}`,
             );
         }
     }
@@ -115,23 +118,34 @@ export class CacheService {
      * Delete all keys matching a pattern
      */
     async deletePattern(pattern: string): Promise<void> {
+        this.logger.debug(`Cache deletePattern for key ${pattern}`);
+
         try {
-            const store = (this.cacheManager as any).store;
+            let cursor = '0';
+            let deleted = 0;
 
-            if (store && typeof store.keys === 'function') {
-                const keys = await store.keys(pattern);
+            do {
+                const [nextCursor, keys] = await this.redis.scan(
+                  cursor,
+                  'MATCH',
+                  pattern,
+                  'COUNT',
+                  100,
+                );
 
-                if (keys && Array.isArray(keys) && keys.length > 0) {
-                    await Promise.all(keys.map((key: string) => this.cacheManager.del(key)));
-                    this.stats.deletes += keys.length;
-                    this.logger.debug(
-                        `Cache DELETE PATTERN: ${pattern} (${keys.length} keys)`,
-                    );
+                cursor = nextCursor;
+
+                if (keys.length > 0) {
+                    await this.redis.del(...keys);
+                    deleted += keys.length;
                 }
-            }
+            } while (cursor !== '0');
+
+            this.stats.deletes += deleted;
+            this.logger.debug(`Cache DELETE PATTERN: ${pattern} (${deleted} keys)`);
         } catch (error) {
             this.logger.error(
-                `Cache delete pattern error for ${pattern}: ${(error as Error).message}`,
+              `Cache delete pattern error for ${pattern}: ${(error as Error).message}`,
             );
         }
     }
@@ -158,7 +172,7 @@ export class CacheService {
             total: 0,
             hitRate: '0.00%',
         };
-        this.logger.log('✅ Cache statistics reset');
+        this.logger.log('âœ… Cache statistics reset');
     }
 
     /**
@@ -178,7 +192,7 @@ export class CacheService {
     private updateHitRate(): void {
         const total = this.stats.hits + this.stats.misses;
         const hitRate =
-            total > 0 ? ((this.stats.hits / total) * 100).toFixed(2) : '0.00';
+          total > 0 ? ((this.stats.hits / total) * 100).toFixed(2) : '0.00';
         this.stats.hitRate = hitRate + '%';
     }
 
@@ -195,8 +209,8 @@ export class CacheService {
             total,
             hitRate: this.stats.hitRate,
             missRate: total > 0
-                ? ((this.stats.misses / total) * 100).toFixed(2) + '%'
-                : '0.00%',
+              ? ((this.stats.misses / total) * 100).toFixed(2) + '%'
+              : '0.00%',
         };
     }
 
@@ -204,16 +218,16 @@ export class CacheService {
      * Batch set multiple keys
      */
     async setMultiple<T>(
-        entries: Array<[string, T, number]>,
+      entries: Array<[string, T, number]>,
     ): Promise<void> {
         try {
             await Promise.all(
-                entries.map(([key, value, ttl]) => this.set(key, value, ttl)),
+              entries.map(([key, value, ttl]) => this.set(key, value, ttl)),
             );
             this.logger.debug(`Batch set: ${entries.length} keys`);
         } catch (error) {
             this.logger.error(
-                `Batch set error: ${(error as Error).message}`,
+              `Batch set error: ${(error as Error).message}`,
             );
         }
     }
@@ -226,7 +240,7 @@ export class CacheService {
             return await Promise.all(keys.map((key) => this.get<T>(key)));
         } catch (error) {
             this.logger.error(
-                `Batch get error: ${(error as Error).message}`,
+              `Batch get error: ${(error as Error).message}`,
             );
             return keys.map(() => null);
         }
@@ -241,7 +255,7 @@ export class CacheService {
             return value !== undefined && value !== null;
         } catch (error) {
             this.logger.error(
-                `Cache exists error for key ${key}: ${(error as Error).message}`,
+              `Cache exists error for key ${key}: ${(error as Error).message}`,
             );
             return false;
         }
@@ -258,7 +272,7 @@ export class CacheService {
             return newValue;
         } catch (error) {
             this.logger.error(
-                `Cache increment error for key ${key}: ${(error as Error).message}`,
+              `Cache increment error for key ${key}: ${(error as Error).message}`,
             );
             throw error;
         }

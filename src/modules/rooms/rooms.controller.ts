@@ -11,7 +11,7 @@ import {
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { Room } from './entities/room.entity';
-import { RateLimitGuard } from "../../guard/rate-limit.guard";
+import { RateLimitGuard } from "@/guard/rate-limit.guard";
 
 @UseGuards(RateLimitGuard)
 @Controller('rooms')
@@ -21,13 +21,7 @@ export class RoomsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() createRoomDto: CreateRoomDto): Promise<Room> {
-    return this.roomsService.create(createRoomDto);
-  }
-
-  @Get()
-  @HttpCode(HttpStatus.OK)
-  async findAll(): Promise<Room[]> {
-    return this.roomsService.findAll();
+    return this.roomsService.createRoom(createRoomDto.name, createRoomDto.creatorNickname, createRoomDto.description);
   }
 
   @Get(':id')
@@ -39,26 +33,10 @@ export class RoomsController {
   @Post(':id/participants/:nickname')
   @HttpCode(HttpStatus.CREATED)
   async addParticipant(
-      @Param('id') roomId: string,
-      @Param('nickname') nickname: string,
+    @Param('id') roomId: string,
+    @Param('nickname') nickname: string,
   ): Promise<{ message: string }> {
     await this.roomsService.addParticipant(roomId, nickname);
     return { message: `User ${nickname} added to room ${roomId}` };
-  }
-
-  @Delete(':id/participants/:nickname')
-  @HttpCode(HttpStatus.OK)
-  async removeParticipant(
-      @Param('id') roomId: string,
-      @Param('nickname') nickname: string,
-  ): Promise<{ message: string }> {
-    await this.roomsService.removeParticipant(roomId, nickname);
-    return { message: `User ${nickname} removed from room ${roomId}` };
-  }
-
-  @Get(':id/participants')
-  @HttpCode(HttpStatus.OK)
-  async getParticipants(@Param('id') roomId: string): Promise<any> {
-    return this.roomsService.getParticipants(roomId);
   }
 }

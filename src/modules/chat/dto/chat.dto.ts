@@ -17,6 +17,9 @@ export class EditMessageDto {
   messageId: string;
 
   @IsString()
+  roomId: string;
+
+  @IsString()
   @MinLength(1)
   @MaxLength(5000)
   content: string;

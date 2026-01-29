@@ -1,4 +1,4 @@
-import { Injectable, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, Inject, Logger, BadRequestException } from '@nestjs/common';
 
 export interface RequestContext {
     traceId?: string;
@@ -48,17 +48,17 @@ export abstract class RequestHandler {
 export class TracingHandler extends RequestHandler {
     async process(request: any, context: RequestContext): Promise<RequestContext> {
         context.traceId =
-            context.traceId ||
-            request.headers?.['x-trace-id'] ||
-            this.generateTraceId();
+          context.traceId ||
+          request.headers?.['x-trace-id'] ||
+          this.generateTraceId();
         context.timestamp = Date.now();
         context.ipAddress =
-            request.ip ||
-            request.headers?.['x-forwarded-for'] ||
-            request.connection?.remoteAddress;
+          request.ip ||
+          request.headers?.['x-forwarded-for'] ||
+          request.connection?.remoteAddress;
 
         this.logger.debug(
-            `[${context.traceId}] Tracing request from ${context.ipAddress}`,
+          `[${context.traceId}] Tracing request from ${context.ipAddress}`,
         );
 
         return context;
@@ -81,11 +81,11 @@ export class AuthorizationHandler extends RequestHandler {
             try {
                 context.userId = this.extractUserId(authHeader);
                 this.logger.debug(
-                    `[${context.traceId}] Authorization: User ${context.userId}`,
+                  `[${context.traceId}] Authorization: User ${context.userId}`,
                 );
             } catch (error) {
                 this.logger.warn(
-                    `[${context.traceId}] Failed to extract user from token`,
+                  `[${context.traceId}] Failed to extract user from token`,
                 );
                 context.userId = 'anonymous';
             }
@@ -120,7 +120,7 @@ export class ValidationHandler extends RequestHandler {
         // Basic validation
         if (!method || !path) {
             this.logger.error(
-                `[${context.traceId}] Invalid request: missing method or path`,
+              `[${context.traceId}] Invalid request: missing method or path`,
             );
             throw new BadRequestException('Invalid request: missing method or path');
         }
@@ -202,10 +202,10 @@ export class RateLimitingHandler extends RequestHandler {
         // Check rate limit
         if (entry.count >= this.config.maxRequests) {
             this.logger.warn(
-                `[${context.traceId}] Rate limit exceeded for ${key}: ${entry.count}/${this.config.maxRequests}`,
+              `[${context.traceId}] Rate limit exceeded for ${key}: ${entry.count}/${this.config.maxRequests}`,
             );
             throw new BadRequestException(
-                `Rate limit exceeded. Max: ${this.config.maxRequests} requests per ${this.config.windowMs / 1000}s`,
+              `Rate limit exceeded. Max: ${this.config.maxRequests} requests per ${this.config.windowMs / 1000}s`,
             );
         }
 
@@ -217,7 +217,7 @@ export class RateLimitingHandler extends RequestHandler {
         };
 
         this.logger.debug(
-            `[${context.traceId}] Rate limiting checked: ${entry.count}/${this.config.maxRequests}`,
+          `[${context.traceId}] Rate limiting checked: ${entry.count}/${this.config.maxRequests}`,
         );
 
         return context;
@@ -243,11 +243,11 @@ export class RequestProcessingPipeline {
     private handlers: RequestHandler[];
 
     constructor(
-        private tracingHandler: TracingHandler,
-        private authHandler: AuthorizationHandler,
-        private validationHandler: ValidationHandler,
-        private securityHandler: SecurityHeadersHandler,
-        private rateLimitHandler: RateLimitingHandler,
+      private tracingHandler: TracingHandler,
+      private authHandler: AuthorizationHandler,
+      private validationHandler: ValidationHandler,
+      private securityHandler: SecurityHeadersHandler,
+      private rateLimitHandler: RateLimitingHandler,
     ) {
         // Build the chain
         this.tracingHandler.setNext(this.authHandler);
@@ -273,12 +273,12 @@ export class RequestProcessingPipeline {
         try {
             context = await this.tracingHandler.handle(request, context);
             this.logger.debug(
-                `[${context.traceId}] Request processed successfully`,
+              `[${context.traceId}] Request processed successfully`,
             );
             return context;
         } catch (error) {
             this.logger.error(
-                `[${context.traceId}] Pipeline error: ${(error as Error).message}`,
+              `[${context.traceId}] Pipeline error: ${(error as Error).message}`,
             );
             throw error;
         }

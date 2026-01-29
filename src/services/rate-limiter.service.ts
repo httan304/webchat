@@ -1,13 +1,14 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Inject } from '@nestjs/common';
 import Redis from 'ioredis';
-import { RateLimitConfig, RateLimitResult } from '../types/rate-limit-type';
+import { REDIS_CLIENT } from '@/infrastructure/redis/redis.provider';
+import { RateLimitConfig, RateLimitResult } from '@/types/rate-limit-type';
 
 @Injectable()
 export class RateLimiterService {
     private readonly logger = new Logger(RateLimiterService.name);
     private readonly lua: string;
 
-    constructor(private readonly redis: Redis) {
+    constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {
         this.lua = `-- KEYS[1] = rate limit key
         -- ARGV[1] = max_tokens
         -- ARGV[2] = refill_rate_per_ms

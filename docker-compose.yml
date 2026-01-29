@@ -40,6 +40,30 @@ services:
       timeout: 5s
       retries: 5
 
+  migration:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chatapp_migration
+    working_dir: /app
+    environment:
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: chatapp
+      DATABASE_PASSWORD: chatapp_password
+      DATABASE_NAME: chatapp_db
+    command: npm run migration:run
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - chatapp_network
+    restart: "no"
+    volumes:
+      - .:/app
+      - /app/node_modules
+
+
   app:
     build:
       context: .
@@ -71,6 +95,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migration:
+        condition: service_completed_successfully
     networks:
       - chatapp_network
 

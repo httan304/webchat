@@ -16,7 +16,7 @@ import {
   DeleteMessageDto,
 } from './dto/chat.dto';
 import { UsersService } from '../users/users.service';
-import { ChatEvent } from '../../types/chat.event.type';
+import { ChatEvent } from '@/types/chat.event.type';
 
 @Injectable()
 @WebSocketGateway({
@@ -146,7 +146,6 @@ export class ChatGateway
 
       const message = await this.chatService.sendMessage(
         { ...data, nickname },
-        nickname,
       );
 
       this.server
@@ -176,9 +175,8 @@ export class ChatGateway
       const nickname = client.data.nickname as string;
 
       const updatedMessage =
-        await this.chatService.editMessage(
+        await this.chatService.editLastMessage(
           { ...data, nickname },
-          nickname,
         );
 
       this.server.emit(

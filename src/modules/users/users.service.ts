@@ -105,10 +105,9 @@ export class UsersService {
       }
 
       // 2. Create user
-      const user = this.userRepository.create({
+      const user: User = this.userRepository.create({
         nickname: dto.nickname,
         isConnected: false,
-        lastSeen: null,
       });
 
       const saved = await this.userRepository.save(user);

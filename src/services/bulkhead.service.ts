@@ -1,9 +1,12 @@
 import {
     Injectable,
+    Inject,
     Logger,
     ServiceUnavailableException,
 } from '@nestjs/common';
 import { Redis } from 'ioredis';
+import { REDIS_CLIENT } from '@/infrastructure/redis/redis.provider';
+
 
 export interface BulkheadConfig {
     name: string;
@@ -15,7 +18,7 @@ export interface BulkheadConfig {
 export class BulkheadService {
     private readonly logger = new Logger(BulkheadService.name);
 
-    constructor(private readonly redis: Redis) {}
+    constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
     private key(name: string) {
         return `bulkhead:${name}`;

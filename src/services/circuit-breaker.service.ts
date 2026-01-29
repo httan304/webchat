@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
-import { CircuitBreakerConfig, CircuitState } from '../types/circuit-breaker.type';
-import { REDIS_CLIENT } from '../infrastructure/redis/redis.provider';
+import { CircuitBreakerConfig, CircuitState } from '@/types/circuit-breaker.type';
+import { REDIS_CLIENT } from '@/infrastructure/redis/redis.provider';
 
 @Injectable()
 export class CircuitBreakerService {
@@ -45,7 +45,7 @@ export class CircuitBreakerService {
             }
 
             await this.redis.set(stateKey, 'HALF_OPEN');
-            this.logger.warn(`Circuit ${name} → HALF_OPEN`);
+            this.logger.warn(`Circuit ${name} â†’ HALF_OPEN`);
         }
 
         // HALF_OPEN lock
@@ -74,7 +74,7 @@ export class CircuitBreakerService {
                 const success = Number(await this.redis.get(this.key(name, 'success')));
                 if (success >= cfg.successThreshold) {
                     await this.reset(name);
-                    this.logger.log(`Circuit ${name} → CLOSED`);
+                    this.logger.log(`Circuit ${name} â†’ CLOSED`);
                 }
             }
 

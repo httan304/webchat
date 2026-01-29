@@ -1,65 +1,19 @@
-import { Module, Global } from '@nestjs/common';
+import { Module } from '@nestjs/common';
+import {ConfigModule, ConfigService} from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { CacheModule } from '@nestjs/cache-manager';
-import * as redisStore from 'cache-manager-redis-store';
 
-import { User } from './modules/users/entities/user.entity';
-import { Room } from './modules/rooms/entities/room.entity';
-import { Message } from './modules/chat/entities/message.entity';
-import { RoomParticipant } from './modules/rooms/entities/room-participant.entity';
+import { ServicesModule } from './services/service.module';
 
+// Feature modules
 import { UsersModule } from './modules/users/users.module';
 import { RoomsModule } from './modules/rooms/rooms.module';
 import { ChatModule } from './modules/chat/chat.module';
-
-import { CircuitBreakerService } from './services/circuit-breaker.service';
-import { CacheService } from './services/cache.service';
-import { RateLimiterService } from './services/rate-limiter.service';
-import { BulkheadService } from './services/bulkhead.service';
-import {
-  RequestProcessingPipeline,
-  TracingHandler,
-  AuthorizationHandler,
-  ValidationHandler,
-  SecurityHeadersHandler,
-  RateLimitingHandler,
-} from './services/chain-of-responsibility.service';
-import {RedisModule} from "@/config/redis.module";
-import {RedisProvider} from "@/infrastructure/redis/redis.provider";
-
-@Global()
-@Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true })],
-  providers: [
-    CircuitBreakerService,
-    RedisProvider,
-    CacheService,
-    RateLimiterService,
-    BulkheadService,
-    TracingHandler,
-    AuthorizationHandler,
-    ValidationHandler,
-    SecurityHeadersHandler,
-    {
-      provide: RateLimitingHandler,
-      useFactory: () =>
-          new RateLimitingHandler({
-            maxRequests: parseInt(process.env.RATE_LIMIT_MAX || '100'),
-            windowMs: parseInt(process.env.RATE_LIMIT_WINDOW || '60000'),
-          }),
-    },
-    RequestProcessingPipeline,
-  ],
-  exports: [
-    CircuitBreakerService,
-    CacheService,
-    RateLimiterService,
-    BulkheadService,
-    RequestProcessingPipeline,
-  ],
-})
-export class InfrastructureModule {}
+import {CacheModule} from "@nestjs/cache-manager";
+import {redisStore} from "cache-manager-redis-yet";
+import {User} from "@/modules/users/entities/user.entity";
+import {Message} from "@/modules/chat/entities/message.entity";
+import {RoomParticipant} from "@/modules/rooms/entities/room-participant.entity";
+import {Room} from "@/modules/rooms/entities/room.entity";
 
 @Module({
   imports: [
@@ -68,7 +22,6 @@ export class InfrastructureModule {}
       envFilePath: ['.env.local', '.env'],
       cache: true,
     }),
-
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
@@ -79,19 +32,16 @@ export class InfrastructureModule {}
         password: configService.get('DATABASE_PASSWORD'),
         database: configService.get('DATABASE_NAME'),
         entities: [User, Room, Message, RoomParticipant],
-        synchronize: configService.get('NODE_ENV') === 'development',
         logging:
-            configService.get('DATABASE_LOGGING') === 'true'
-                ? ['query', 'error', 'warn']
-                : ['error'],
+          configService.get('DATABASE_LOGGING') === 'true'
+            ? ['query', 'error', 'warn']
+            : ['error'],
         maxQueryExecutionTime: 1000,
         poolSize: parseInt(configService.get('DATABASE_POOL_SIZE') || '20'),
-        migrations: ['src/migrations/**/*.ts'],
-        migrationsRun: true,
-        ssl:
-            configService.get('NODE_ENV') === 'production'
-                ? { rejectUnauthorized: false }
-                : false,
+        migrations: ['dist/migrations/**/*.js'],
+        migrationsRun: false,
+        synchronize: false,
+        ssl: false
       }),
     }),
 
@@ -107,13 +57,12 @@ export class InfrastructureModule {}
         ttl: 300,
       }),
     }),
-    RedisModule,
-    InfrastructureModule,
+
+    ServicesModule,
+
     UsersModule,
     RoomsModule,
     ChatModule,
   ],
-
-  controllers: [],
 })
 export class AppModule {}

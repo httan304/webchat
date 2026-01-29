@@ -15,11 +15,11 @@ import { Room } from '../rooms/entities/room.entity';
 import { RoomParticipant } from '../rooms/entities/room-participant.entity';
 import { SendMessageDto, EditMessageDto } from './dto/chat.dto';
 
-import { CircuitBreakerService } from '../../services/circuit-breaker.service';
-import { CacheService } from '../../services/cache.service';
-import { RateLimiterService } from '../../services/rate-limiter.service';
-import { BulkheadService } from '../../services/bulkhead.service';
-import { BulkheadNameType } from '../../types/bulkhead-name-type';
+import { CircuitBreakerService } from '@/services/circuit-breaker.service';
+import { CacheService } from '@/services/cache.service';
+import { RateLimiterService } from '@/services/rate-limiter.service';
+import { BulkheadService } from '@/services/bulkhead.service';
+import { BulkheadNameType } from '@/types/bulkhead-name-type';
 
 @Injectable()
 export class ChatService {
@@ -173,8 +173,6 @@ export class ChatService {
    * ✅ Caching
    */
   async editLastMessage(data: EditMessageDto): Promise<Message> {
-    const { roomId, nickname, content } = data;
-
     // ✅ Execute with Circuit Breaker + Bulkhead
     return this.bulkhead.execute(
       {
@@ -559,22 +557,30 @@ export class ChatService {
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
-    // ✅ Remove select, just use relations
-    const participants = await this.participantRepository.find({
-      where: { roomId },
-      relations: ['user'],  // Now works properly
-    });
+    // ✅ Use QueryBuilder with leftJoinAndSelect
+    const participants = await this.participantRepository
+      .createQueryBuilder('participant')
+      .leftJoinAndSelect('participant.user', 'user')  // Explicit join
+      .where('participant.roomId = :roomId', { roomId })
+      .select([
+        'participant.id',
+        'participant.roomId',
+        'participant.nickname',
+        'participant.joinedAt',
+        'user.id',
+        'user.nickname',
+        'user.isConnected',
+        'user.lastSeen',
+      ])
+      .getMany();
 
-    // ✅ Filter out null users
-    const result = participants
-      .filter((p) => p.user !== null)
-      .map((p) => ({
-        id: p.user.id,
-        nickname: p.user.nickname,
-        isConnected: p.user.isConnected,
-        lastSeen: p.user.lastSeen,
-        joinedAt: p.joinedAt,
-      }));
+    const result = participants.map((p) => ({
+      id: p.user?.id || null,
+      nickname: p.nickname,
+      isConnected: p.user?.isConnected || false,
+      lastSeen: p.user?.lastSeen || null,
+      joinedAt: p.joinedAt,
+    }));
 
     await this.cache.set(cacheKey, result, 60);
     return result;

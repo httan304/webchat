@@ -15,11 +15,11 @@ import { RoomParticipant } from './entities/room-participant.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 
-import { CircuitBreakerService } from '../../services/circuit-breaker.service';
-import { CacheService } from '../../services/cache.service';
-import { RateLimiterService } from '../../services/rate-limiter.service';
-import { BulkheadService } from '../../services/bulkhead.service';
-import { BulkheadNameType } from '../../types/bulkhead-name-type';
+import { CircuitBreakerService } from '@/services/circuit-breaker.service';
+import { CacheService } from '@/services/cache.service';
+import { RateLimiterService } from '@/services/rate-limiter.service';
+import { BulkheadService } from '@/services/bulkhead.service';
+import { BulkheadNameType } from '@/types/bulkhead-name-type';
 
 @Injectable()
 export class RoomsService {
@@ -117,7 +117,7 @@ export class RoomsService {
       const room = await this.roomRepository.save(
         this.roomRepository.create({
           name,
-          ownerNickname,
+          creatorNickname: ownerNickname,
           description,
         }),
       );
@@ -310,7 +310,7 @@ export class RoomsService {
       }
 
       // 2. Check ownership
-      if (room.ownerNickname !== requesterNickname) {
+      if (room.creatorNickname !== requesterNickname) {
         throw new ForbiddenException('Only room owner can delete this room');
       }
 
@@ -403,7 +403,7 @@ export class RoomsService {
   private async performGetRoomsCreatedBy(nickname: string): Promise<Room[]> {
     try {
       return await this.roomRepository.find({
-        where: { ownerNickname: nickname },
+        where: { creatorNickname: nickname },
         order: { createdAt: 'DESC' },
       });
     } catch (error) {
@@ -475,7 +475,7 @@ export class RoomsService {
       // 1. Check room exists
       const room = await this.roomRepository.findOne({
         where: { id: roomId },
-        select: ['id', 'ownerNickname'],
+        select: ['id', 'creatorNickname'],
       });
 
       if (!room) {
@@ -483,7 +483,7 @@ export class RoomsService {
       }
 
       // 2. Authorization check (only owner can view)
-      if (room.ownerNickname !== requesterNickname) {
+      if (room.creatorNickname !== requesterNickname) {
         throw new ForbiddenException('Only room owner can view participants');
       }
 
