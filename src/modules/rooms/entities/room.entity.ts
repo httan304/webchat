@@ -7,11 +7,11 @@ import {
   OneToMany,
   Index,
 } from 'typeorm';
-import { Message } from '../../chat/entities/message.entity';
 import { RoomParticipant } from './room-participant.entity';
+import { Message } from '../../chat/entities/message.entity';
 
 @Entity('rooms')
-@Index(['createdAt'])
+@Index(['creatorNickname']) // ✅ Fast lookup by creator
 export class Room {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -22,15 +22,19 @@ export class Room {
   @Column({ type: 'text', nullable: true })
   description: string;
 
+  @Column({ type: 'varchar', length: 50 })
+  creatorNickname: string;
+
   @CreateDateColumn()
   createdAt: Date;
 
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @OneToMany(() => Message, (message) => message.room, { lazy: true })
-  messages: Promise<Message[]>;
-
+  // ✅ Optional: Relationships (load only when needed)
   @OneToMany(() => RoomParticipant, (participant) => participant.room)
-  participants: RoomParticipant[];
+  participants?: RoomParticipant[];
+
+  @OneToMany(() => Message, (message) => message.room)
+  messages?: Message[];
 }

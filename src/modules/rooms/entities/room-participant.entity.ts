@@ -1,35 +1,39 @@
 import {
   Entity,
   PrimaryGeneratedColumn,
-  ManyToOne,
-  CreateDateColumn,
-  ForeignKey,
   Column,
+  ManyToOne,
+  JoinColumn,
+  CreateDateColumn,
   Index,
+  Unique,
 } from 'typeorm';
 import { Room } from './room.entity';
 import { User } from '../../users/entities/user.entity';
 
 @Entity('room_participants')
-// @Index(['roomId', 'userId'], { unique: true, name: 'idx_room_user' })
+@Unique(['roomId', 'nickname']) // ✅ Prevent duplicate participation
+@Index(['roomId']) // ✅ Fast lookup by room
+@Index(['nickname']) // ✅ Fast lookup by user
 export class RoomParticipant {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ForeignKey(() => Room)
-  @Column()
+  @Column({ type: 'uuid' })
   roomId: string;
 
-  @ForeignKey(() => User)
-  @Column()
-  userId: string;
+  @Column({ type: 'varchar', length: 50 })
+  nickname: string;
 
   @CreateDateColumn()
   joinedAt: Date;
 
-  @ManyToOne(() => Room, (room) => room.participants)
-  room: Room;
+  // ✅ Optional: Relationships (load only when needed)
+  @ManyToOne(() => Room, (room) => room.participants, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'roomId' })
+  room?: Room;
 
-  @ManyToOne(() => User, (user) => user.roomParticipants)
-  user: User;
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'nickname', referencedColumnName: 'nickname' })
+  user?: User;
 }

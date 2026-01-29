@@ -1,4 +1,3 @@
-
 import {
   Entity,
   PrimaryGeneratedColumn,
@@ -8,13 +7,12 @@ import {
   OneToMany,
   Index,
 } from 'typeorm';
-import { Message } from '../../chat/entities/message.entity';
 import { RoomParticipant } from '../../rooms/entities/room-participant.entity';
 
 @Entity('users')
-@Index(['nickname'], { unique: true })
-@Index(['isConnected'])
-@Index(['createdAt'])
+@Index(['nickname'], { unique: true }) // ✅ Unique constraint + index
+@Index(['isConnected']) // ✅ Fast filter by online status
+@Index(['createdAt']) // ✅ Sort by registration date
 export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -25,15 +23,16 @@ export class User {
   @Column({ type: 'boolean', default: false })
   isConnected: boolean;
 
+  @Column({ type: 'timestamp', nullable: true })
+  lastSeen: Date;
+
   @CreateDateColumn()
   createdAt: Date;
 
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @OneToMany(() => Message, (message) => message.user)
-  messages: Message[];
-
+  // ✅ Optional: Relationships (load only when needed)
   @OneToMany(() => RoomParticipant, (participant) => participant.user)
-  roomParticipants: RoomParticipant[];
+  participation?: RoomParticipant[];
 }

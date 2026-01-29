@@ -3,32 +3,29 @@ import {
   PrimaryGeneratedColumn,
   Column,
   ManyToOne,
+  JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
   Index,
-  ForeignKey,
 } from 'typeorm';
-import { User } from '../../users/entities/user.entity';
 import { Room } from '../../rooms/entities/room.entity';
 
 @Entity('messages')
-// @Index(['roomId', 'createdAt'], { name: 'idx_room_messages' })
-@Index(['userId', 'createdAt'])
-@Index(['createdAt'])
+@Index(['roomId', 'createdAt']) // ✅ Composite index for room messages query
+@Index(['senderNickname', 'createdAt']) // ✅ Index for user's messages
+@Index(['createdAt']) // ✅ Index for chronological queries
 export class Message {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
+  @Column({ type: 'uuid' })
+  roomId: string;
+
+  @Column({ type: 'varchar', length: 50 })
+  senderNickname: string;
+
   @Column({ type: 'text' })
   content: string;
-
-  @ForeignKey(() => User)
-  @Column()
-  userId: string;
-
-  @ForeignKey(() => Room)
-  @Column()
-  roomId: string;
 
   @Column({ type: 'boolean', default: false })
   edited: boolean;
@@ -39,9 +36,9 @@ export class Message {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  @ManyToOne(() => User, (user) => user.messages, { lazy: true })
-  user: Promise<User>;
-
-  @ManyToOne(() => Room, (room) => room.messages, { lazy: true })
-  room: Promise<Room>;
+  // ✅ Optional: ManyToOne relationship with Room
+  // Uncomment if you want to use relations
+  @ManyToOne(() => Room, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'roomId' })
+  room?: Room;
 }
