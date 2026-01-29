@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+
+# Build output
+dist/
+
+# Dependencies
+node_modules/
+
+# Lock files
+yarn.lock
