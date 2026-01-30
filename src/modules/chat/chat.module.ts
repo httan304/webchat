@@ -11,12 +11,10 @@ import { UsersModule } from '../users/users.module';
   imports: [
     TypeOrmModule.forFeature([Message, Room, RoomParticipant]),
     UsersModule,
-    // ✅ No need to import services - they're global now!
   ],
   providers: [
     ChatGateway,
     ChatService,
-    // ✅ No need to provide services - they're global now!
   ],
   exports: [ChatService],
 })

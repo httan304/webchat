@@ -56,7 +56,7 @@ export class RoomsService {
     ownerNickname: string,
     description?: string,
   ): Promise<Room> {
-    // ✅ 1. Rate Limiting - Prevent spam room creation
+    // 1. Rate Limiting - Prevent spam room creation
     const rateLimitKey = `room-create:${ownerNickname}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 3, // 3 rooms
@@ -74,7 +74,7 @@ export class RoomsService {
       );
     }
 
-    // ✅ 2. Execute with Circuit Breaker + Bulkhead
+    // 2. Execute with Circuit Breaker + Bulkhead
     return this.bulkhead.execute(
       {
         name: BulkheadNameType.ChatWrite,
@@ -85,7 +85,7 @@ export class RoomsService {
         this.circuitBreaker.execute(
           'room-create',
           () => this.performCreateRoom(name, ownerNickname, description),
-          // ✅ Fallback
+          // Fallback
           async (error: Error) => {
             this.logger.error(`Circuit breaker fallback for createRoom: ${error.message}`);
             throw new HttpException(
@@ -259,7 +259,7 @@ export class RoomsService {
    * ✅ Cache invalidation
    */
   async deleteRoom(roomId: string, requesterNickname: string): Promise<void> {
-    // ✅ Rate Limiting
+    // Rate Limiting
     const rateLimitKey = `room-delete:${requesterNickname}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 5, // 5 deletions
@@ -355,7 +355,7 @@ export class RoomsService {
    * ✅ Caching
    */
   async getRoomsCreatedBy(nickname: string): Promise<Room[]> {
-    // ✅ Rate Limiting
+    // Rate Limiting
     const rateLimitKey = `room-list:${nickname}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 20, // 20 requests
@@ -369,7 +369,7 @@ export class RoomsService {
       );
     }
 
-    // ✅ Cache first
+    // Cache first
     const cacheKey = `${this.ROOMS_LIST_PREFIX}created:${nickname}`;
 
     return this.cache.getOrSet(
@@ -425,7 +425,7 @@ export class RoomsService {
    * ✅ Caching
    */
   async getParticipants(roomId: string, requesterNickname: string) {
-    // ✅ Rate Limiting
+    // Rate Limiting
     const rateLimitKey = `room-participants:${requesterNickname}:${roomId}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 20,
@@ -439,7 +439,7 @@ export class RoomsService {
       );
     }
 
-    // ✅ Cache first
+    // Cache first
     const cacheKey = `${this.PARTICIPANT_CACHE_PREFIX}room:${roomId}`;
 
     return this.cache.getOrSet(
@@ -522,7 +522,7 @@ export class RoomsService {
    * ✅ Bulkhead
    */
   async findOne(roomId: string): Promise<Room> {
-    // ✅ Try cache first
+    // Try cache first
     const cacheKey = `${this.ROOM_CACHE_PREFIX}${roomId}`;
     let room = await this.cache.get<Room>(cacheKey);
 
@@ -530,7 +530,7 @@ export class RoomsService {
       return room;
     }
 
-    // ✅ Cache miss - query database
+    // Cache miss - query database
     return this.bulkhead.execute(
       {
         name: BulkheadNameType.ChatRead,
@@ -569,7 +569,7 @@ export class RoomsService {
               );
             }
           },
-          // ✅ Fallback
+          // Fallback
           async (error: Error) => {
             this.logger.error(`Circuit breaker fallback for findOne: ${error.message}`);
             throw new HttpException(

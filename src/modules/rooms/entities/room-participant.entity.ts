@@ -12,9 +12,9 @@ import { Room } from './room.entity';
 import { User } from '../../users/entities/user.entity';
 
 @Entity('room_participants')
-@Unique(['roomId', 'nickname']) // ✅ Prevent duplicate participation
-@Index(['roomId']) // ✅ Fast lookup by room
-@Index(['nickname']) // ✅ Fast lookup by user
+@Unique(['roomId', 'nickname'])
+@Index(['roomId'])
+@Index(['nickname'])
 export class RoomParticipant {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -28,7 +28,6 @@ export class RoomParticipant {
   @CreateDateColumn()
   joinedAt: Date;
 
-  // ✅ Optional: Relationships (load only when needed)
   @ManyToOne(() => Room, (room) => room.participants, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'roomId' })
   room?: Room;

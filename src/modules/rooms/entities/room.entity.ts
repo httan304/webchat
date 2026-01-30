@@ -31,7 +31,6 @@ export class Room {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  // ✅ Optional: Relationships (load only when needed)
   @OneToMany(() => RoomParticipant, (participant) => participant.room)
   participants?: RoomParticipant[];
 

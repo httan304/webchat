@@ -11,9 +11,9 @@ import {
 import { Room } from '../../rooms/entities/room.entity';
 
 @Entity('messages')
-@Index(['roomId', 'createdAt']) // ✅ Composite index for room messages query
-@Index(['senderNickname', 'createdAt']) // ✅ Index for user's messages
-@Index(['createdAt']) // ✅ Index for chronological queries
+@Index(['roomId', 'createdAt'])
+@Index(['senderNickname', 'createdAt'])
+@Index(['createdAt'])
 export class Message {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -36,8 +36,6 @@ export class Message {
   @UpdateDateColumn()
   updatedAt: Date;
 
-  // ✅ Optional: ManyToOne relationship with Room
-  // Uncomment if you want to use relations
   @ManyToOne(() => Room, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'roomId' })
   room?: Room;

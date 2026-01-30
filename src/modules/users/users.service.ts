@@ -44,7 +44,7 @@ export class UsersService {
    * ✅ Caching
    */
   async create(dto: CreateUserDto): Promise<User> {
-    // ✅ Rate Limiting - Prevent spam user creation
+    // Rate Limiting - Prevent spam user creation
     const rateLimitKey = `user-create:${dto.nickname}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 3, // 3 attempts
@@ -62,7 +62,7 @@ export class UsersService {
       );
     }
 
-    // ✅ Execute with Bulkhead + Circuit Breaker
+    // Execute with Bulkhead + Circuit Breaker
     return this.bulkhead.execute(
       {
         name: BulkheadNameType.ChatWrite,
@@ -149,7 +149,7 @@ export class UsersService {
    * ✅ Caching
    */
   async findByNickname(nickname: string): Promise<User> {
-    // ✅ Try cache first
+    // Try cache first
     const cacheKey = `${this.USER_CACHE_PREFIX}${nickname}`;
 
     return this.cache.getOrSet(
@@ -221,7 +221,7 @@ export class UsersService {
    * ✅ Caching
    */
   async findAll(query: FindAllDto): Promise<FindAllUsersResponseDto> {
-    // ✅ Rate Limiting
+    // Rate Limiting
     const rateLimitKey = `user-list:${query.search || 'all'}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 20, // 20 requests
@@ -239,7 +239,7 @@ export class UsersService {
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, query.limit ?? 20);
 
-    // ✅ Try cache first
+    // Try cache first
     const cacheKey = `${this.USERS_LIST_PREFIX}p${page}:l${limit}:s${
       query.search ?? 'none'
     }`;
@@ -346,7 +346,7 @@ export class UsersService {
         this.circuitBreaker.execute(
           'user-update-connection',
           () => this.performUpdateConnectionStatus(nickname, isConnected),
-          // ✅ Fallback - log but don't throw (non-critical operation)
+          // Fallback - log but don't throw (non-critical operation)
           async (error: Error) => {
             this.logger.warn(
               `Circuit breaker fallback for updateConnectionStatus: ${error.message}`,
@@ -406,7 +406,7 @@ export class UsersService {
    * ✅ Caching
    */
   async getOnlineUsers(): Promise<User[]> {
-    // ✅ Rate Limiting
+    // Rate Limiting
     const rateLimitKey = 'user-online-list';
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 30, // 30 requests
@@ -420,7 +420,7 @@ export class UsersService {
       );
     }
 
-    // ✅ Try cache first (short TTL since status changes frequently)
+    // Try cache first (short TTL since status changes frequently)
     const cacheKey = `${this.USERS_LIST_PREFIX}online`;
 
     return this.cache.getOrSet(
@@ -480,7 +480,7 @@ export class UsersService {
    * ✅ Cache cleanup
    */
   async deleteUser(nickname: string): Promise<void> {
-    // ✅ Rate Limiting
+    // Rate Limiting
     const rateLimitKey = `user-delete:${nickname}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 3, // 3 attempts
@@ -569,7 +569,7 @@ export class UsersService {
    * ✅ Bulkhead
    */
   async findById(id: string): Promise<User> {
-    // ✅ Try cache first
+    // Try cache first
     const cacheKey = `${this.USER_CACHE_PREFIX}id:${id}`;
 
     return this.cache.getOrSet(
@@ -609,7 +609,7 @@ export class UsersService {
                   );
                 }
               },
-              // ✅ Fallback
+              // Fallback
               async (error: Error) => {
                 this.logger.error(
                   `Circuit breaker fallback for findById: ${error.message}`,
