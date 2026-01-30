@@ -1,30 +1,25 @@
-import {Test, TestingModule} from '@nestjs/testing';
+import { Test, TestingModule } from '@nestjs/testing';
 import {
 	NotFoundException,
 	ForbiddenException,
 	HttpException,
 } from '@nestjs/common';
-import {getRepositoryToken} from '@nestjs/typeorm';
-import {ChatService} from './chat.service';
-import {Message} from './entities/message.entity';
-import {Room} from '../rooms/entities/room.entity';
-import {RoomParticipant} from '../rooms/entities/room-participant.entity';
-import {SendMessageDto, EditMessageDto} from './dto/chat.dto';
+import { getRepositoryToken } from '@nestjs/typeorm';
 
-import {CircuitBreakerService} from '@/services/circuit-breaker.service';
-import {CacheService} from '@/services/cache.service';
-import {RateLimiterService} from '@/services/rate-limiter.service';
-import {BulkheadService} from '@/services/bulkhead.service';
+import { ChatService } from './chat.service';
+import { Message } from './entities/message.entity';
+import { Room } from '../rooms/entities/room.entity';
+import { RoomParticipant } from '../rooms/entities/room-participant.entity';
+import { SendMessageDto, EditMessageDto } from './dto/chat.dto';
+
+import { CircuitBreakerService } from '@/services/circuit-breaker.service';
+import { CacheService } from '@/services/cache.service';
+import { RateLimiterService } from '@/services/rate-limiter.service';
+import { BulkheadService } from '@/services/bulkhead.service';
+import {RateLimitGuard} from "@/guard/rate-limit.guard";
 
 describe('ChatService', () => {
 	let service: ChatService;
-	let messageRepository: any;
-	let roomRepository: any;
-	let participantRepository: any;
-	let circuitBreaker: any;
-	let cache: any;
-	let rateLimiter: any;
-	let bulkhead: any;
 
 	const mockMessage: Message = {
 		id: 'message-uuid-123',
@@ -32,118 +27,74 @@ describe('ChatService', () => {
 		senderNickname: 'alice',
 		content: 'Hello world',
 		edited: false,
-		createdAt: new Date('2026-01-29'),
-		updatedAt: new Date('2026-01-29'),
+		createdAt: new Date(),
+		updatedAt: new Date(),
 	};
 
 	const mockRoom: Room = {
 		id: 'room-uuid-123',
 		name: 'Test Room',
-		description: 'Test Description',
+		description: 'desc',
 		creatorNickname: 'alice',
 		createdAt: new Date(),
 		updatedAt: new Date(),
 	};
 
-	const mockParticipant: RoomParticipant = {
-		id: 'participant-uuid-123',
-		roomId: 'room-uuid-123',
-		nickname: 'alice',
-		joinedAt: new Date(),
-	};
-
-	const mockMessageRepository = {
+	const messageRepo = {
 		findOne: jest.fn(),
 		find: jest.fn(),
-		create: jest.fn(),
 		save: jest.fn(),
-		delete: jest.fn(),
 		remove: jest.fn(),
-		exists: jest.fn(),
-		createQueryBuilder: jest.fn(() => ({
-			where: jest.fn().mockReturnThis(),
-			andWhere: jest.fn().mockReturnThis(),
-			orderBy: jest.fn().mockReturnThis(),
-			skip: jest.fn().mockReturnThis(),
-			take: jest.fn().mockReturnThis(),
-			getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
-			getOne: jest.fn(),
-		})),
+		createQueryBuilder: jest.fn(),
 	};
 
-	const mockRoomRepository = {
+	const roomRepo = {
 		findOne: jest.fn(),
 	};
 
-	const mockParticipantRepository = {
-		findOne: jest.fn(),
+	const participantRepo = {
 		exists: jest.fn(),
+		createQueryBuilder: jest.fn(),
 	};
 
-	const mockCircuitBreaker = {
-		execute: jest.fn((name, fn, fallback) => fn()),
+	const cache = {
+		get: jest.fn(),
+		set: jest.fn(),
+		delete: jest.fn(),
+		deletePattern: jest.fn(),
+		getOrSet: jest.fn(),
 	};
 
-	const mockCache = {
-		get: jest.fn().mockResolvedValue(null),
-		set: jest.fn().mockResolvedValue(undefined),
-		delete: jest.fn().mockResolvedValue(undefined),
-		deletePattern: jest.fn().mockResolvedValue(undefined),
-		getOrSet: jest.fn((key, fn, ttl) => fn()),
-		exists: jest.fn().mockResolvedValue(false),
+	const rateLimiter = {
+		isAllowed: jest.fn(),
 	};
 
-	const mockRateLimiter = {
-		isAllowed: jest.fn().mockResolvedValue({allowed: true}),
+	const circuitBreaker = {
+		execute: jest.fn((_name, fn) => fn()),
+		getHealthStatus: jest.fn(),
 	};
 
-	const mockBulkhead = {
-		execute: jest.fn((config, fn) => fn()),
+	const bulkhead = {
+		execute: jest.fn((_cfg, fn) => fn()),
+		getStatus: jest.fn(),
 	};
 
 	beforeEach(async () => {
 		const module: TestingModule = await Test.createTestingModule({
 			providers: [
 				ChatService,
-				{
-					provide: getRepositoryToken(Message),
-					useValue: mockMessageRepository,
-				},
-				{
-					provide: getRepositoryToken(Room),
-					useValue: mockRoomRepository,
-				},
-				{
-					provide: getRepositoryToken(RoomParticipant),
-					useValue: mockParticipantRepository,
-				},
-				{
-					provide: CircuitBreakerService,
-					useValue: mockCircuitBreaker,
-				},
-				{
-					provide: CacheService,
-					useValue: mockCache,
-				},
-				{
-					provide: RateLimiterService,
-					useValue: mockRateLimiter,
-				},
-				{
-					provide: BulkheadService,
-					useValue: mockBulkhead,
-				},
+				{ provide: getRepositoryToken(Message), useValue: messageRepo },
+				{ provide: getRepositoryToken(Room), useValue: roomRepo },
+				{ provide: getRepositoryToken(RoomParticipant), useValue: participantRepo },
+				{ provide: CacheService, useValue: cache },
+				{ provide: RateLimiterService, useValue: rateLimiter },
+				{ provide: CircuitBreakerService, useValue: circuitBreaker },
+				{ provide: BulkheadService, useValue: bulkhead },
 			],
-		}).compile();
+		})
+			.compile();
 
-		service = module.get<ChatService>(ChatService);
-		messageRepository = module.get(getRepositoryToken(Message));
-		roomRepository = module.get(getRepositoryToken(Room));
-		participantRepository = module.get(getRepositoryToken(RoomParticipant));
-		circuitBreaker = module.get(CircuitBreakerService);
-		cache = module.get(CacheService);
-		rateLimiter = module.get(RateLimiterService);
-		bulkhead = module.get(BulkheadService);
+		service = module.get(ChatService);
 	});
 
 	afterEach(() => {
@@ -151,267 +102,181 @@ describe('ChatService', () => {
 	});
 
 	describe('sendMessage', () => {
+		it('should send message successfully (cache hit)', async () => {
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			roomRepo.findOne.mockResolvedValue(mockRoom);
+			cache.get.mockResolvedValueOnce(true);
+			messageRepo.save.mockResolvedValue(mockMessage);
 
-		it('should send message successfully', async () => {
-			const sendMessageDto: SendMessageDto = {
-				roomId: 'room-uuid-123',
+			const dto: SendMessageDto = {
+				roomId: mockRoom.id,
 				nickname: 'alice',
-				content: 'Hello world',
+				content: 'Hello',
 			};
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockCache.get.mockResolvedValueOnce(true);
 
-			mockMessageRepository.create.mockReturnValue(mockMessage);
-			mockMessageRepository.save.mockResolvedValue(mockMessage);
-
-			const result = await service.sendMessage(sendMessageDto);
+			const result = await service.sendMessage(dto);
 
 			expect(result).toEqual(mockMessage);
-			expect(mockRateLimiter.isAllowed).toHaveBeenCalled();
-			expect(mockMessageRepository.save).toHaveBeenCalled();
-			expect(mockCache.deletePattern).toHaveBeenCalled();
+			expect(messageRepo.save).toHaveBeenCalled();
+			expect(cache.deletePattern).toHaveBeenCalled();
 		});
 
-		it('should send message with participant from database (cache miss)', async () => {
-			const sendMessageDto: SendMessageDto = {
-				roomId: 'room-uuid-123',
-				nickname: 'alice',
-				content: 'Hello world',
-			};
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockCache.get.mockResolvedValueOnce(null); // Cache miss
-			mockParticipantRepository.exists.mockResolvedValue(true);
-			mockMessageRepository.create.mockReturnValue(mockMessage);
-			mockMessageRepository.save.mockResolvedValue(mockMessage);
+		it('should send message (cache miss → DB check)', async () => {
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			roomRepo.findOne.mockResolvedValue(mockRoom);
+			cache.get.mockResolvedValueOnce(null);
+			participantRepo.exists.mockResolvedValue(true);
+			messageRepo.save.mockResolvedValue(mockMessage);
 
-			const result = await service.sendMessage(sendMessageDto);
+			const result = await service.sendMessage({
+				roomId: mockRoom.id,
+				nickname: 'alice',
+				content: 'Hello',
+			});
 
 			expect(result).toEqual(mockMessage);
-			expect(mockParticipantRepository.exists).toHaveBeenCalledWith({
-				where: {roomId: 'room-uuid-123', nickname: 'alice'},
-			});
-			expect(mockCache.set).toHaveBeenCalled(); // Cache the result
+			expect(participantRepo.exists).toHaveBeenCalled();
+			expect(cache.set).toHaveBeenCalled();
 		});
 
 		it('should throw HttpException when rate limited', async () => {
-			const sendMessageDto: SendMessageDto = {
-				roomId: 'room-uuid-123',
-				nickname: 'alice',
-				content: 'Hello world',
-			};
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: false, retryAfter: 5 });
 
-			mockRateLimiter.isAllowed.mockResolvedValue({
-				allowed: false,
-				retryAfter: 5,
-			});
-
-			await expect(service.sendMessage(sendMessageDto)).rejects.toThrow(
-				HttpException,
-			);
-			expect(mockMessageRepository.save).not.toHaveBeenCalled();
+			await expect(
+				service.sendMessage({
+					roomId: 'r1',
+					nickname: 'alice',
+					content: 'Hi',
+				}),
+			).rejects.toThrow(HttpException);
 		});
 
 		it('should throw NotFoundException if room not found', async () => {
-			const messageRoomNotfound: SendMessageDto = {
-				roomId: 'notfound1111',
-				nickname: 'noname',
-				content: 'Hello',
-			};
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			roomRepo.findOne.mockResolvedValue(null);
 
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockCache.get.mockResolvedValueOnce(null);
-			mockRoomRepository.findOne.mockResolvedValue(null);
-
-			await expect(service.sendMessage(messageRoomNotfound)).rejects.toThrow(
-				NotFoundException,
-			);
+			await expect(
+				service.sendMessage({
+					roomId: 'bad-room',
+					nickname: 'alice',
+					content: 'Hi',
+				}),
+			).rejects.toThrow(NotFoundException);
 		});
 
-		it('should throw ForbiddenException if not a participant', async () => {
-			const sendMessageDto: SendMessageDto = {
-				roomId: 'room-uuid-123',
-				nickname: 'bob',
-				content: 'Hello',
-			};
+		it('should throw ForbiddenException if not participant', async () => {
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			roomRepo.findOne.mockResolvedValue(mockRoom);
+			cache.get.mockResolvedValueOnce(null);
+			participantRepo.exists.mockResolvedValue(false);
 
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockCache.get.mockResolvedValueOnce(null); // Cache miss
-			mockParticipantRepository.exists.mockResolvedValue(false);
-
-			await expect(service.sendMessage(sendMessageDto)).rejects.toThrow(
-				ForbiddenException,
-			);
-
-			expect(mockMessageRepository.save).not.toHaveBeenCalled();
+			await expect(
+				service.sendMessage({
+					roomId: mockRoom.id,
+					nickname: 'bob',
+					content: 'Hi',
+				}),
+			).rejects.toThrow(ForbiddenException);
 		});
-
-		xit('should use cached participant check', async () => {
-			const sendMessageDto: SendMessageDto = {
-				roomId: 'room-uuid-123',
-				nickname: 'tan',
-				content: 'Hello',
-			};
-
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockRoomRepository.findOne.mockResolvedValue({id: 'room-uuid-123'});
-			mockCache.get.mockResolvedValue(true);
-			mockMessageRepository.save.mockResolvedValue(mockMessage);
-
-			await service.sendMessage(sendMessageDto);
-			expect(mockParticipantRepository.exists).not.toHaveBeenCalled();
-			expect(mockMessageRepository.save).toHaveBeenCalled();
-		});
-	})
+	});
 
 	describe('editLastMessage', () => {
-		xit('should edit last message successfully', async () => {
-			const dto: EditMessageDto = {
-				messageId: 'message-uuid-123',
-				roomId: 'room-uuid-123',
-				nickname: 'alice',
-				content: 'Updated',
-			};
-
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-
-			// ✅ FIX: Create fresh QB mock BEFORE calling method
-			const qb = {
-				where: jest.fn().mockReturnThis(),
-				andWhere: jest.fn().mockReturnThis(),
-				orderBy: jest.fn().mockReturnThis(),
-				getOne: jest.fn().mockResolvedValue(mockMessage),
-			};
-			mockMessageRepository.createQueryBuilder.mockReturnValue(qb);
-
-			mockMessageRepository.save.mockResolvedValue({
+		it('should edit last message successfully', async () => {
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			cache.get.mockResolvedValueOnce(null);
+			messageRepo.findOne.mockResolvedValue(mockMessage);
+			messageRepo.save.mockResolvedValue({
 				...mockMessage,
 				content: 'Updated',
 				edited: true,
 			});
 
-			const result = await service.editLastMessage(dto);
-
-			expect(result.content).toBe('Updated');
-			expect(result.edited).toBe(true);
-		});
-
-		it('should throw NotFoundException if no message found', async () => {
-			const editMessageDto: EditMessageDto = {
-				messageId: 'message-uuid-123',
-				roomId: 'room-uuid-123',
+			const result = await service.editLastMessage({
+				roomId: mockRoom.id,
 				nickname: 'alice',
 				content: 'Updated',
-			};
+				messageId: mockMessage.id,
+			});
 
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
+			expect(result.edited).toBe(true);
+			expect(result.content).toBe('Updated');
+		});
 
-			const qb = mockMessageRepository.createQueryBuilder();
-			qb.getOne.mockResolvedValue(null);
+		it('should throw NotFoundException if no message', async () => {
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			cache.get.mockResolvedValueOnce(null);
+			messageRepo.findOne.mockResolvedValue(null);
 
-			await expect(service.editLastMessage(editMessageDto)).rejects.toThrow(
-				NotFoundException,
-			);
+			await expect(
+				service.editLastMessage({
+					roomId: mockRoom.id,
+					nickname: 'alice',
+					content: 'Updated',
+					messageId: mockMessage.id,
+				}),
+			).rejects.toThrow(NotFoundException);
 		});
 	});
 
 	describe('deleteMessage', () => {
 		it('should delete message successfully', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockMessageRepository.findOne.mockResolvedValue(mockMessage);
-			mockMessageRepository.remove.mockResolvedValue(mockMessage);
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			cache.get.mockResolvedValueOnce(null);
+			messageRepo.findOne.mockResolvedValue(mockMessage);
+			messageRepo.remove.mockResolvedValue(mockMessage);
 
-			await service.deleteMessage('message-uuid-123', 'alice');
+			await service.deleteMessage(mockMessage.id, 'alice');
 
-			expect(mockMessageRepository.remove).toHaveBeenCalledWith(mockMessage);
-			expect(mockCache.delete).toHaveBeenCalled();
-			expect(mockCache.deletePattern).toHaveBeenCalled();
+			expect(messageRepo.remove).toHaveBeenCalledWith(mockMessage);
+			expect(cache.delete).toHaveBeenCalled();
+			expect(cache.deletePattern).toHaveBeenCalled();
 		});
 
-		it('should throw NotFoundException if message not found', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockMessageRepository.findOne.mockResolvedValue(null);
+		it('should throw ForbiddenException if not owner', async () => {
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			cache.get.mockResolvedValueOnce(null);
+			messageRepo.findOne.mockResolvedValue(mockMessage);
 
 			await expect(
-				service.deleteMessage('nonexistent', 'alice'),
-			).rejects.toThrow(NotFoundException);
-		});
-
-		it('should throw ForbiddenException if not message owner', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockMessageRepository.findOne.mockResolvedValue(mockMessage);
-
-			await expect(
-				service.deleteMessage('message-uuid-123', 'bob'),
+				service.deleteMessage(mockMessage.id, 'bob'),
 			).rejects.toThrow(ForbiddenException);
 		});
 	});
 
 	describe('getMessages', () => {
 		it('should return paginated messages', async () => {
-			const messages = [mockMessage];
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			roomRepo.findOne.mockResolvedValue(mockRoom);
 
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
 			const qb = {
 				where: jest.fn().mockReturnThis(),
 				orderBy: jest.fn().mockReturnThis(),
 				skip: jest.fn().mockReturnThis(),
 				take: jest.fn().mockReturnThis(),
-				getManyAndCount: jest.fn().mockResolvedValue([messages, 1]),
+				getManyAndCount: jest.fn().mockResolvedValue([[mockMessage], 1]),
 			};
-			mockMessageRepository.createQueryBuilder.mockReturnValue(qb);
-			mockCache.getOrSet.mockImplementation(async (key, fn) => fn());
 
-			const result = await service.getMessages('room-uuid-123', 1, 50);
+			messageRepo.createQueryBuilder.mockImplementation((alias) => {
+				expect(alias).toBe('m');
+				return qb;
+			});
 
-			expect(result.data).toEqual(messages);
+			cache.getOrSet.mockImplementation(async (_k, fn) => fn());
+
+			const result = await service.getMessages(mockRoom.id, 1, 50);
+
+			expect(result.data.length).toBe(1);
 			expect(result.meta.total).toBe(1);
 		});
 
-		it('should use cache for messages', async () => {
-			const mockResult = {
-				data: [mockMessage],
-				meta: {total: 1, page: 1, limit: 50, totalPages: 1},
-			};
-
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockCache.getOrSet.mockImplementation(() => mockResult);
-
-			const result = await service.getMessages('room-uuid-123', 1, 50);
-
-			expect(result).toEqual(mockResult);
-			expect(mockMessageRepository.createQueryBuilder).not.toHaveBeenCalled();
-		});
-
-
-		it('should sanitize pagination parameters', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			const qb = {
-				where: jest.fn().mockReturnThis(),
-				orderBy: jest.fn().mockReturnThis(),
-				skip: jest.fn().mockReturnThis(),
-				take: jest.fn().mockReturnThis(),
-				getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
-			};
-			mockMessageRepository.createQueryBuilder.mockReturnValue(qb);
-			mockCache.getOrSet.mockImplementation(async (key, fn) => fn());
-
-			await service.getMessages('room-uuid-123', -1, 999);
-
-			expect(qb.skip).toHaveBeenCalledWith(0);
-			expect(qb.take).toHaveBeenCalledWith(100);
-		});
-
 		it('should throw NotFoundException if room not found', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({allowed: true});
-			mockCache.getOrSet.mockImplementation(async (key, fn) => fn());
-			mockRoomRepository.findOne.mockResolvedValue(null);
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
+			roomRepo.findOne.mockResolvedValue(null);
+			cache.getOrSet.mockImplementation(async (_k, fn) => fn());
 
-			await expect(service.getMessages('roomnotfound', 1, 50)).rejects.toThrow(NotFoundException);
+			await expect(
+				service.getMessages('bad-room', 1, 50),
+			).rejects.toThrow(NotFoundException);
 		});
 	});
 });

@@ -5,6 +5,7 @@ import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { FindAllDto } from './dto/find-all-user.dto';
 import { User } from './entities/user.entity';
+import {RateLimitGuard} from "@/guard/rate-limit.guard";
 
 describe('UsersController', () => {
 	let controller: UsersController;
@@ -43,7 +44,9 @@ describe('UsersController', () => {
 					useValue: mockUsersService,
 				},
 			],
-		}).compile();
+		}).overrideGuard(RateLimitGuard)
+			.useValue({ canActivate: () => true })
+			.compile();
 
 		controller = module.get<UsersController>(UsersController);
 		service = module.get<UsersService>(UsersService);

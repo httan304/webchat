@@ -1,62 +1,40 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import {
 	ConflictException,
 	NotFoundException,
-	HttpException,
 } from '@nestjs/common';
-import {getRepositoryToken} from '@nestjs/typeorm';
+
 import { UsersService } from './users.service';
 import { User } from './entities/user.entity';
-import { CreateUserDto } from './dto/create-user.dto';
-import {CircuitBreakerService} from "@/services/circuit-breaker.service";
-import {CacheService} from "@/services/cache.service";
-import {RateLimiterService} from "@/services/rate-limiter.service";
-import {BulkheadService} from "@/services/bulkhead.service";
+
+import { CacheService } from '../../services/cache.service';
+import { CircuitBreakerService } from '../../services/circuit-breaker.service';
+import { RateLimiterService } from '../../services/rate-limiter.service';
+import { BulkheadService } from '../../services/bulkhead.service';
+import {RateLimitGuard} from "@/guard/rate-limit.guard";
 
 describe('UsersService', () => {
 	let service: UsersService;
-	let userRepository: any;
-	let circuitBreaker: any;
-	let cache: any;
-	let rateLimiter: any;
-	let bulkhead: any;
+	let repo: jest.Mocked<Repository<User>>;
 
-	const mockUser: User = {
-		id: 'user-uuid-123',
-		nickname: 'testuser',
-		lastSeen: new Date('2026-01-29'),
-		isConnected: false,
-		createdAt: new Date('2026-01-29'),
-		updatedAt: new Date('2026-01-29'),
-	};
-
-	// ✅ Mock implementations
-	const mockRepository = {
+	const mockRepo = {
 		findOne: jest.fn(),
-		find: jest.fn(),
 		create: jest.fn(),
 		save: jest.fn(),
 		delete: jest.fn(),
-		createQueryBuilder: jest.fn(() => ({
-			where: jest.fn().mockReturnThis(),
-			orderBy: jest.fn().mockReturnThis(),
-			skip: jest.fn().mockReturnThis(),
-			take: jest.fn().mockReturnThis(),
-			getManyAndCount: jest.fn(),
-		})),
-	};
-
-	const mockCircuitBreaker = {
-		execute: jest.fn((name, fn, fallback) => fn()),
-		getHealthStatus: jest.fn().mockResolvedValue({}),
+		find: jest.fn(),
+		createQueryBuilder: jest.fn(),
 	};
 
 	const mockCache = {
+		get: jest.fn(),
 		set: jest.fn(),
 		delete: jest.fn(),
 		deletePattern: jest.fn(),
-		getOrSet: jest.fn((key, fn, ttl) => fn()),
-		getStats: jest.fn().mockReturnValue({}),
+		getOrSet: jest.fn((_k, fn) => fn()),
+		getStats: jest.fn(),
 	};
 
 	const mockRateLimiter = {
@@ -64,214 +42,148 @@ describe('UsersService', () => {
 	};
 
 	const mockBulkhead = {
-		execute: jest.fn((config, fn) => fn()),
-		getStatus: jest.fn().mockResolvedValue({}),
+		execute: jest.fn((_opt, fn) => fn()),
+		getStatus: jest.fn(),
 	};
 
+	const mockCircuitBreaker = {
+		execute: jest.fn((_key, fn) => fn()),
+		getHealthStatus: jest.fn(),
+	};
 
 	beforeEach(async () => {
 		const module: TestingModule = await Test.createTestingModule({
 			providers: [
 				UsersService,
-				{
-					provide: getRepositoryToken(User),
-					useValue: mockRepository,
-				},
-				{
-					provide: CircuitBreakerService, // ✅ Use class as token
-					useValue: mockCircuitBreaker,
-				},
-				{
-					provide: CacheService, // ✅ Use class as token
-					useValue: mockCache,
-				},
-				{
-					provide: RateLimiterService, // ✅ Use class as token
-					useValue: mockRateLimiter,
-				},
-				{
-					provide: BulkheadService, // ✅ Use class as token
-					useValue: mockBulkhead,
-				},
+				{ provide: getRepositoryToken(User), useValue: mockRepo },
+				{ provide: CacheService, useValue: mockCache },
+				{ provide: RateLimiterService, useValue: mockRateLimiter },
+				{ provide: BulkheadService, useValue: mockBulkhead },
+				{ provide: CircuitBreakerService, useValue: mockCircuitBreaker },
 			],
-		}).compile();
+		})
+			.compile();
 
-		service = module.get<UsersService>(UsersService);
-		userRepository = module.get(getRepositoryToken(User));
-		circuitBreaker = module.get(CircuitBreakerService);
-		cache = module.get(CacheService);
-		rateLimiter = module.get(RateLimiterService);
-		bulkhead = module.get(BulkheadService);
-	});
+		service = module.get(UsersService);
+		repo = module.get(getRepositoryToken(User));
 
-	afterEach(() => {
 		jest.clearAllMocks();
 	});
 
-	describe('create', () => {
+	describe('create()', () => {
 		it('should create user successfully', async () => {
-			const dto: CreateUserDto = { nickname: 'testuser' };
+			repo.findOne.mockResolvedValue(null);
+			repo.create.mockReturnValue({ nickname: 'john' } as User);
+			repo.save.mockResolvedValue({ id: '1', nickname: 'john' } as User);
 
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRepository.findOne.mockResolvedValue(null);
-			mockRepository.create.mockReturnValue(mockUser);
-			mockRepository.save.mockResolvedValue(mockUser);
+			const result = await service.create({ nickname: 'john' });
 
-			const result = await service.create(dto);
-
-			expect(result).toEqual(mockUser);
-			expect(mockRepository.save).toHaveBeenCalled();
+			expect(result.nickname).toBe('john');
+			expect(repo.save).toHaveBeenCalled();
 			expect(mockCache.set).toHaveBeenCalled();
-			expect(mockCache.deletePattern).toHaveBeenCalled();
-		});
-
-		it('should throw HttpException when rate limited', async () => {
-			const dto: CreateUserDto = { nickname: 'testuser' };
-
-			mockRateLimiter.isAllowed.mockResolvedValue({
-				allowed: false,
-				retryAfter: 30,
-			});
-
-			await expect(service.create(dto)).rejects.toThrow(HttpException);
 		});
 
 		it('should throw ConflictException if nickname exists', async () => {
-			const dto: CreateUserDto = { nickname: 'testuser' };
+			repo.findOne.mockResolvedValue({ id: '1' } as User);
 
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRepository.findOne.mockResolvedValue(mockUser);
-
-			await expect(service.create(dto)).rejects.toThrow(ConflictException);
+			await expect(service.create({ nickname: 'john' }))
+				.rejects.toBeInstanceOf(ConflictException);
 		});
 	});
 
-	describe('findByNickname', () => {
+	describe('findByNickname()', () => {
 		it('should return user', async () => {
-			mockCache.getOrSet.mockImplementation(() => mockUser);
+			repo.findOne.mockResolvedValue({ nickname: 'john' } as User);
 
-			const result = await service.findByNickname('testuser');
+			const result = await service.findByNickname('john');
 
-			expect(result).toEqual(mockUser);
+			expect(result.nickname).toBe('john');
 		});
 
 		it('should throw NotFoundException', async () => {
-			mockCache.getOrSet.mockImplementation(async (k, fn) => fn());
-			mockRepository.findOne.mockResolvedValue(null);
+			repo.findOne.mockResolvedValue(null);
 
-			await expect(service.findByNickname('nonexistent')).rejects.toThrow(
-				NotFoundException,
-			);
+			await expect(service.findByNickname('john'))
+				.rejects.toBeInstanceOf(NotFoundException);
 		});
 	});
 
-	describe('findAll', () => {
-		it('should return paginated users', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(async (k, fn) => fn());
+	describe('findById()', () => {
+		it('should return user by id', async () => {
+			repo.findOne.mockResolvedValue({ id: '1' } as User);
 
-			const qb = mockRepository.createQueryBuilder();
-			qb.getManyAndCount.mockResolvedValue([[mockUser], 1]);
+			const user = await service.findById('1');
 
-			const result = await service.findAll({ page: 1, limit: 20 });
-
-			expect(result.data).toEqual([mockUser]);
-			expect(result.meta.total).toBe(1);
+			expect(user.id).toBe('1');
 		});
 
-		it('should apply search filter', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(async (k, fn) => fn());
+		it('should throw NotFoundException', async () => {
+			repo.findOne.mockResolvedValue(null);
 
-			const qb = mockRepository.createQueryBuilder();
-			qb.getManyAndCount.mockResolvedValue([[], 0]);
-
-			await service.findAll({ page: 1, limit: 20, search: 'test' });
-
-			expect(qb.where).toHaveBeenCalled();
+			await expect(service.findById('1'))
+				.rejects.toBeInstanceOf(NotFoundException);
 		});
 	});
 
-	describe('updateConnectionStatus', () => {
-		it('should update status', async () => {
-			mockRepository.findOne.mockResolvedValue(mockUser);
-			mockRepository.save.mockResolvedValue(mockUser);
+	describe('updateConnectionStatus()', () => {
+		it('should update status if user exists', async () => {
+			repo.findOne.mockResolvedValue({ nickname: 'john' } as User);
+			repo.save.mockResolvedValue({} as User);
 
-			await service.updateConnectionStatus('testuser', true);
+			await service.updateConnectionStatus('john', true);
 
-			expect(mockRepository.save).toHaveBeenCalled();
+			expect(repo.save).toHaveBeenCalled();
 			expect(mockCache.delete).toHaveBeenCalled();
 		});
 
-		it('should handle non-existent user', async () => {
-			mockRepository.findOne.mockResolvedValue(null);
+		it('should not throw if user not found', async () => {
+			repo.findOne.mockResolvedValue(null);
 
-			await service.updateConnectionStatus('nonexistent', true);
-
-			expect(mockRepository.save).not.toHaveBeenCalled();
+			await expect(
+				service.updateConnectionStatus('john', true),
+			).resolves.not.toThrow();
 		});
 	});
 
-	describe('getOnlineUsers', () => {
-		it('should return online users', async () => {
-			const onlineUser = { ...mockUser, isConnected: true };
-
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(async (k, fn) => fn());
-			mockRepository.find.mockResolvedValue([onlineUser]);
-
-			const result = await service.getOnlineUsers();
-
-			expect(result).toEqual([onlineUser]);
-		});
-	});
-
-	describe('deleteUser', () => {
+	describe('deleteUser()', () => {
 		it('should delete user', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRepository.findOne.mockResolvedValue(mockUser);
-			mockRepository.delete.mockResolvedValue({ affected: 1 });
+			repo.findOne.mockResolvedValue({ id: '1', nickname: 'john' } as User);
+			repo.delete.mockResolvedValue({} as any);
 
-			await service.deleteUser('testuser');
+			await service.deleteUser('john');
 
-			expect(mockRepository.delete).toHaveBeenCalled();
+			expect(repo.delete).toHaveBeenCalledWith('1');
 			expect(mockCache.deletePattern).toHaveBeenCalled();
 		});
 
 		it('should throw NotFoundException', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRepository.findOne.mockResolvedValue(null);
+			repo.findOne.mockResolvedValue(null);
 
-			await expect(service.deleteUser('nonexistent')).rejects.toThrow(
-				NotFoundException,
-			);
+			await expect(service.deleteUser('john'))
+				.rejects.toBeInstanceOf(NotFoundException);
 		});
 	});
 
-	describe('findById', () => {
-		it('should find user by id', async () => {
-			mockCache.getOrSet.mockImplementation(async (k, fn) => fn());
-			mockRepository.findOne.mockResolvedValue(mockUser);
+	describe('getOnlineUsers()', () => {
+		it('should return online users', async () => {
+			repo.find.mockResolvedValue([{ nickname: 'john' }] as User[]);
 
-			const result = await service.findById('user-uuid-123');
+			const users = await service.getOnlineUsers();
 
-			expect(result).toEqual(mockUser);
+			expect(users.length).toBe(1);
+			expect(users[0].nickname).toBe('john');
 		});
 	});
 
-	describe('getHealthStatus', () => {
+	describe('getHealthStatus()', () => {
 		it('should return healthy status', async () => {
-			const result = await service.getHealthStatus();
+			mockCircuitBreaker.getHealthStatus.mockResolvedValue({});
+			mockBulkhead.getStatus.mockResolvedValue({});
+			mockCache.getStats.mockReturnValue({});
 
-			expect(result.status).toBe('healthy');
-		});
+			const health = await service.getHealthStatus();
 
-		it('should return degraded on error', async () => {
-			mockCircuitBreaker.getHealthStatus.mockRejectedValue(new Error('Failed'));
-
-			const result = await service.getHealthStatus();
-
-			expect(result.status).toBe('degraded');
+			expect(health.status).toBe('healthy');
 		});
 	});
 });

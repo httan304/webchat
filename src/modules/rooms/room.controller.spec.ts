@@ -3,13 +3,7 @@ import { RoomsController } from './rooms.controller';
 import { RoomsService } from './rooms.service';
 import { CreateRoomDto } from './dto/create-room.dto';
 import { Room } from './entities/room.entity';
-
-// Mock the guard
-jest.mock('@/guard/rate-limit.guard', () => ({
-	RateLimitGuard: jest.fn().mockImplementation(() => ({
-		canActivate: jest.fn(() => true),
-	})),
-}));
+import {RateLimitGuard} from "@/guard/rate-limit.guard";
 
 describe('RoomsController', () => {
 	let controller: RoomsController;
@@ -27,7 +21,9 @@ describe('RoomsController', () => {
 	const mockRoomsService = {
 		createRoom: jest.fn(),
 		findOne: jest.fn(),
-		addParticipant: jest.fn(),
+		joinRoom: jest.fn(),
+		getParticipants: jest.fn(),
+		deleteRoom: jest.fn(),
 	};
 
 	beforeEach(async () => {
@@ -39,7 +35,9 @@ describe('RoomsController', () => {
 					useValue: mockRoomsService,
 				},
 			],
-		}).compile();
+		}).overrideGuard(RateLimitGuard)
+			.useValue({ canActivate: () => true })
+			.compile();
 
 		controller = module.get<RoomsController>(RoomsController);
 		service = module.get<RoomsService>(RoomsService);
@@ -71,7 +69,7 @@ describe('RoomsController', () => {
 
 		it('should create room without description', async () => {
 			const createRoomDto: CreateRoomDto = {
-				description: 'Test Description',
+				description: '',
 				name: 'Test Room',
 				creatorNickname: 'alice',
 			};
@@ -83,7 +81,7 @@ describe('RoomsController', () => {
 			expect(service.createRoom).toHaveBeenCalledWith(
 				'Test Room',
 				'alice',
-				undefined,
+				''
 			);
 		});
 
@@ -127,7 +125,7 @@ describe('RoomsController', () => {
 
 	describe('addParticipant', () => {
 		it('should add participant to room', async () => {
-			mockRoomsService.addParticipant.mockResolvedValue(undefined);
+			mockRoomsService.joinRoom.mockResolvedValue(undefined);
 
 			const result = await controller.addParticipant(
 				'room-uuid-123',
@@ -135,22 +133,48 @@ describe('RoomsController', () => {
 			);
 
 			expect(result).toEqual({
-				message: 'User bob added to room room-uuid-123',
+				message: 'User bob joined room room-uuid-123',
 			});
-			expect(service.addParticipant).toHaveBeenCalledWith(
+
+			expect(service.joinRoom).toHaveBeenCalledWith(
 				'room-uuid-123',
 				'bob',
 			);
 		});
 
 		it('should propagate service errors', async () => {
-			mockRoomsService.addParticipant.mockRejectedValue(
+			mockRoomsService.joinRoom.mockRejectedValue(
 				new Error('User not found'),
 			);
 
 			await expect(
 				controller.addParticipant('room-uuid-123', 'nonexistent'),
 			).rejects.toThrow('User not found');
+		});
+	});
+
+	describe('getParticipants', () => {
+		it('should return list of participants', async () => {
+			const participants = [
+				{
+					id: 'u1',
+					nickname: 'alice',
+					joinedAt: new Date(),
+				},
+			];
+
+			mockRoomsService.getParticipants.mockResolvedValue(participants);
+
+			const result = await controller.getParticipants(
+				'room-uuid-123',
+				'alice',
+			);
+
+			expect(result).toEqual(participants);
+			expect(service.getParticipants).toHaveBeenCalledWith(
+				'room-uuid-123',
+				'alice',
+			);
 		});
 	});
 });

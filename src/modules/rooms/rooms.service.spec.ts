@@ -18,6 +18,7 @@ import { CircuitBreakerService } from '@/services/circuit-breaker.service';
 import { CacheService } from '@/services/cache.service';
 import { RateLimiterService } from '@/services/rate-limiter.service';
 import { BulkheadService } from '@/services/bulkhead.service';
+import {RateLimitGuard} from "@/guard/rate-limit.guard";
 
 describe('RoomsService', () => {
 	let service: RoomsService;
@@ -138,7 +139,8 @@ describe('RoomsService', () => {
 					useValue: mockBulkhead,
 				},
 			],
-		}).compile();
+		})
+			.compile();
 
 		service = module.get<RoomsService>(RoomsService);
 		roomRepository = module.get(getRepositoryToken(Room));

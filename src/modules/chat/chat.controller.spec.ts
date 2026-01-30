@@ -1,15 +1,8 @@
-// src/modules/chat/chat.controller.spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
 import { ChatController } from './chat.controller';
 import { ChatService } from './chat.service';
 import { Message } from './entities/message.entity';
-
-// Mock the guard
-jest.mock('@/guard/rate-limit.guard', () => ({
-	RateLimitGuard: jest.fn().mockImplementation(() => ({
-		canActivate: jest.fn(() => true),
-	})),
-}));
+import {RateLimitGuard} from "@/guard/rate-limit.guard";
 
 describe('ChatController', () => {
 	let controller: ChatController;
@@ -50,7 +43,9 @@ describe('ChatController', () => {
 					useValue: mockChatService,
 				},
 			],
-		}).compile();
+		}).overrideGuard(RateLimitGuard)
+			.useValue({ canActivate: () => true })
+			.compile();
 
 		controller = module.get<ChatController>(ChatController);
 		service = module.get<ChatService>(ChatService);

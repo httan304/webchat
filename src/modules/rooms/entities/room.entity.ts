@@ -11,7 +11,7 @@ import { RoomParticipant } from './room-participant.entity';
 import { Message } from '../../chat/entities/message.entity';
 
 @Entity('rooms')
-@Index(['creatorNickname']) // ✅ Fast lookup by creator
+@Index(['creatorNickname'])
 export class Room {
   @PrimaryGeneratedColumn('uuid')
   id: string;
@@ -19,7 +19,7 @@ export class Room {
   @Column({ type: 'varchar', length: 255 })
   name: string;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'text', nullable: true, default: '' })
   description: string;
 
   @Column({ type: 'varchar', length: 50 })

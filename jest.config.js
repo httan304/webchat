@@ -1,28 +1,33 @@
 module.exports = {
 	moduleFileExtensions: ['js', 'json', 'ts'],
-	rootDir: 'src',
+	
+	rootDir: '.',
+	
 	testRegex: '.*\\.spec\\.ts$',
+	
 	transform: {
 		'^.+\\.(t|j)s$': 'ts-jest',
 	},
+	
 	collectCoverageFrom: [
-		'**/*.(t|j)s',
-		'!**/*.spec.ts',
-		'!**/node_modules/**',
-		'!**/dist/**',
-		'!**/*.interface.ts',
-		'!**/*.dto.ts',
-		'!**/main.ts',
-		'!**/migrations/**',
+		'src/**/*.(t|j)s',
+		'!src/**/*.spec.ts',
+		'!src/**/node_modules/**',
+		'!src/**/dist/**',
+		'!src/**/*.interface.ts',
+		'!src/**/*.dto.ts',
+		'!src/main.ts',
+		'!src/migrations/**',
 	],
-	coverageDirectory: '../coverage',
+	
+	coverageDirectory: './coverage',
+	
 	testEnvironment: 'node',
+	
 	moduleNameMapper: {
-		'^@/(.*)$': '<rootDir>/$1',
+		'^@/(.*)$': '<rootDir>/src/$1',
 	},
-	globals: {
-		'ts-jest': {
-			isolatedModules: true,
-		},
-	},
+	clearMocks: true,
+	resetMocks: false,
+	restoreMocks: false,
 };
