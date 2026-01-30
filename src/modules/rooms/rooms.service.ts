@@ -455,7 +455,7 @@ export class RoomsService {
             this.circuitBreaker.execute(
               'room-get-participants',
               () => this.performGetParticipants(roomId, requesterNickname),
-              // ✅ Fallback
+              // Fallback
               async () => {
                 this.logger.warn(`Circuit breaker fallback for getParticipants`);
                 return [];

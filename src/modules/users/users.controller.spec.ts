@@ -13,6 +13,7 @@ describe('UsersController', () => {
 	const mockUser: User = {
 		id: 'user-uuid-123',
 		nickname: 'testuser',
+		lastSeen: new Date('2026-01-28T15:30:00Z'),
 		isConnected: false,
 		createdAt: new Date('2026-01-29T10:00:00Z'),
 		updatedAt: new Date('2026-01-29T10:00:00Z'),

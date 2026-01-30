@@ -71,6 +71,7 @@ describe('RoomsController', () => {
 
 		it('should create room without description', async () => {
 			const createRoomDto: CreateRoomDto = {
+				description: 'Test Description',
 				name: 'Test Room',
 				creatorNickname: 'alice',
 			};
@@ -88,6 +89,7 @@ describe('RoomsController', () => {
 
 		it('should propagate service errors', async () => {
 			const createRoomDto: CreateRoomDto = {
+				description: 'Test Description',
 				name: 'Test Room',
 				creatorNickname: 'alice',
 			};

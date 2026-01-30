@@ -6,6 +6,7 @@ import { Message } from './entities/message.entity';
 import { Room } from '../rooms/entities/room.entity';
 import { RoomParticipant } from '../rooms/entities/room-participant.entity';
 import { UsersModule } from '../users/users.module';
+import {ChatController} from "@/modules/chat/chat.controller";
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { UsersModule } from '../users/users.module';
     ChatGateway,
     ChatService,
   ],
+  controllers: [ChatController],
   exports: [ChatService],
 })
 export class ChatModule {}

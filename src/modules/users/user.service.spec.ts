@@ -4,12 +4,10 @@ import {
 	NotFoundException,
 	HttpException,
 } from '@nestjs/common';
-import {getRepositoryToken, InjectRepository} from '@nestjs/typeorm';
+import {getRepositoryToken} from '@nestjs/typeorm';
 import { UsersService } from './users.service';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
-import { FindAllDto } from './dto/find-all-user.dto';
-import {Repository} from "typeorm";
 import {CircuitBreakerService} from "@/services/circuit-breaker.service";
 import {CacheService} from "@/services/cache.service";
 import {RateLimiterService} from "@/services/rate-limiter.service";
@@ -26,6 +24,7 @@ describe('UsersService', () => {
 	const mockUser: User = {
 		id: 'user-uuid-123',
 		nickname: 'testuser',
+		lastSeen: new Date('2026-01-29'),
 		isConnected: false,
 		createdAt: new Date('2026-01-29'),
 		updatedAt: new Date('2026-01-29'),
