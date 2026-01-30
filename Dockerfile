@@ -1,21 +1,17 @@
+# Dockerfile
 FROM node:18-alpine
 
 WORKDIR /app
 
-# Copy package files
+# Install dependencies first (cache friendly)
 COPY package*.json ./
+RUN npm ci
 
-# Install all dependencies
-RUN npm install
-
-# Copy application code
+# Copy source
 COPY . .
 
-# Build the application
+# Build nếu là NestJS
 RUN npm run build
 
-# Expose port
-EXPOSE 3000
-
-# Start application
-CMD ["npm", "run", "start:dev"]
+# Default command (override ở docker-compose)
+CMD ["node", "dist/main.js"]

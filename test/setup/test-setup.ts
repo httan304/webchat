@@ -2,34 +2,6 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
 /**
- * Create mock repository with common methods
- */
-export const createMockRepository = <T>(): Partial<Repository<T>> => ({
-	find: jest.fn(),
-	findOne: jest.fn(),
-	findOneOrFail: jest.fn(),
-	save: jest.fn(),
-	create: jest.fn(),
-	delete: jest.fn(),
-	update: jest.fn(),
-	count: jest.fn(),
-	createQueryBuilder: jest.fn(() => ({
-		where: jest.fn().mockReturnThis(),
-		andWhere: jest.fn().mockReturnThis(),
-		orWhere: jest.fn().mockReturnThis(),
-		leftJoinAndSelect: jest.fn().mockReturnThis(),
-		orderBy: jest.fn().mockReturnThis(),
-		skip: jest.fn().mockReturnThis(),
-		take: jest.fn().mockReturnThis(),
-		getMany: jest.fn(),
-		getOne: jest.fn(),
-		getManyAndCount: jest.fn(),
-		select: jest.fn().mockReturnThis(),
-		addSelect: jest.fn().mockReturnThis(),
-	})),
-});
-
-/**
  * Create mock Redis client
  */
 export const createMockRedis = () => ({

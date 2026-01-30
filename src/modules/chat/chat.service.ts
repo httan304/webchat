@@ -104,20 +104,16 @@ export class ChatService {
 	 * @private
 	 */
 	private async performSendMessage(data: SendMessageDto): Promise<Message> {
-    console.log('performSendMessage', data)
 		const {roomId, nickname, content} = data;
 
 		try {
       const room = await this.roomRepository.findOne({where: {id: roomId}, select: ['id']})
-      console.log(`room ${roomId}`, room);
       if (!room) {
         throw new NotFoundException('Room not found');
       }
 			// 1. Check if user is participant (with cache)
 			const cacheKey = `${this.PARTICIPANT_CACHE_PREFIX}${roomId}:${nickname}`;
 			let isParticipant = await this.cache.get<boolean>(cacheKey);
-      console.log('isParticipant', isParticipant)
-      console.log('cacheKey', cacheKey)
 
 			if (isParticipant === null) {
 				isParticipant = await this.participantRepository.exists({
@@ -537,8 +533,6 @@ export class ChatService {
         where: { id: roomId },
         select: ['id']
       });
-
-      console.log('xxxxxxxxx', room);
 
       if (!room) {
         throw new NotFoundException('Room not found');
