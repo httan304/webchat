@@ -11,19 +11,28 @@ import {
 	Param,
 	Logger,
 } from '@nestjs/common';
-import {Request} from 'express';
-import {UsersService} from './users.service';
-import {CreateUserDto} from './dto/create-user.dto';
-import {FindAllDto} from './dto/find-all-user.dto';
-import {FindAllUsersResponseDto} from './dto/find-all-user-response.dto';
-import {User} from './entities/user.entity';
+import { Request } from 'express';
+import {
+	ApiTags,
+	ApiOperation,
+	ApiResponse,
+	ApiParam,
+	ApiQuery,
+	ApiBody,
+} from '@nestjs/swagger';
 
+import { UsersService } from './users.service';
+import { CreateUserDto } from './dto/create-user.dto';
+import { FindAllDto } from './dto/find-all-user.dto';
+import { FindAllUsersResponseDto } from './dto/find-all-user-response.dto';
+import { User } from './entities/user.entity';
+
+@ApiTags('Users')
 @Controller('users')
 export class UsersController {
 	private readonly logger = new Logger(UsersController.name);
 
-	constructor(private readonly usersService: UsersService) {
-	}
+	constructor(private readonly usersService: UsersService) {}
 
 	/**
 	 * Create a new user
@@ -31,6 +40,10 @@ export class UsersController {
 	 */
 	@Post()
 	@HttpCode(HttpStatus.CREATED)
+	@ApiOperation({ summary: 'Create a new user' })
+	@ApiBody({ type: CreateUserDto })
+	@ApiResponse({ status: 201, description: 'User created successfully', type: User })
+	@ApiResponse({ status: 400, description: 'Invalid input' })
 	async create(
 		@Body() createUserDto: CreateUserDto,
 		@Req() req: Request,
@@ -50,6 +63,15 @@ export class UsersController {
 	 */
 	@Get()
 	@HttpCode(HttpStatus.OK)
+	@ApiOperation({ summary: 'Get all users with pagination & search' })
+	@ApiQuery({ name: 'page', required: false, example: 1 })
+	@ApiQuery({ name: 'limit', required: false, example: 20 })
+	@ApiQuery({ name: 'search', required: false, example: 'john' })
+	@ApiResponse({
+		status: 200,
+		description: 'List of users',
+		type: FindAllUsersResponseDto,
+	})
 	async findAll(
 		@Query() query: FindAllDto,
 		@Req() req: Request,
@@ -69,6 +91,10 @@ export class UsersController {
 	 */
 	@Get(':nickname')
 	@HttpCode(HttpStatus.OK)
+	@ApiOperation({ summary: 'Get user by nickname' })
+	@ApiParam({ name: 'nickname', example: 'alice' })
+	@ApiResponse({ status: 200, type: User })
+	@ApiResponse({ status: 404, description: 'User not found' })
 	async findByNickname(
 		@Param('nickname') nickname: string,
 	): Promise<User> {
@@ -81,6 +107,17 @@ export class UsersController {
 	 */
 	@Get(':nickname/status')
 	@HttpCode(HttpStatus.OK)
+	@ApiOperation({ summary: 'Get user connection status' })
+	@ApiParam({ name: 'nickname', example: 'alice' })
+	@ApiResponse({
+		status: 200,
+		schema: {
+			example: {
+				nickname: 'alice',
+				isConnected: true,
+			},
+		},
+	})
 	async getConnectionStatus(
 		@Param('nickname') nickname: string,
 	): Promise<{ nickname: string; isConnected: boolean }> {
@@ -97,6 +134,16 @@ export class UsersController {
 	 */
 	@Delete(':nickname')
 	@HttpCode(HttpStatus.OK)
+	@ApiOperation({ summary: 'Delete user by nickname' })
+	@ApiParam({ name: 'nickname', example: 'alice' })
+	@ApiResponse({
+		status: 200,
+		schema: {
+			example: {
+				message: 'User alice deleted successfully',
+			},
+		},
+	})
 	async deleteUser(
 		@Param('nickname') nickname: string,
 		@Req() req: Request,
@@ -105,7 +152,7 @@ export class UsersController {
 
 		await this.usersService.deleteUser(nickname);
 
-		return {message: `User ${nickname} deleted successfully`};
+		return { message: `User ${nickname} deleted successfully` };
 	}
 
 	/**

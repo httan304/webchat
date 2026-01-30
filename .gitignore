@@ -9,6 +9,3 @@ dist/
 
 # Dependencies
 node_modules/
-
-# Lock files
-yarn.lock

@@ -1,17 +1,15 @@
-# Dockerfile
-FROM node:18-alpine
+FROM node:18-alpine AS app
 
 WORKDIR /app
 
-# Install dependencies first (cache friendly)
-COPY package*.json ./
+# Copy lock files first (cache friendly)
+COPY package.json package-lock.json ./
+
 RUN npm ci
 
-# Copy source
+# Copy source code
 COPY . .
 
-# Build nếu là NestJS
 RUN npm run build
 
-# Default command (override ở docker-compose)
 CMD ["node", "dist/main.js"]
