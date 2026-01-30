@@ -4,7 +4,8 @@ import { ApiProperty } from '@nestjs/swagger';
 export class DeleteRoomDto {
 	@ApiProperty({
 		example: 'alice',
-		description: 'Nickname of the room creator who requests deletion',
+		description: 'Nickname of the room owner who requests room deletion',
+		required: true,
 	})
 	@IsNotEmpty()
 	@IsString()

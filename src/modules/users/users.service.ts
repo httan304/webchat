@@ -14,11 +14,11 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { FindAllDto } from './dto/find-all-user.dto';
 import { FindAllUsersResponseDto } from './dto/find-all-user-response.dto';
 
-import { CircuitBreakerService } from '../../services/circuit-breaker.service';
-import { CacheService } from '../../services/cache.service';
-import { RateLimiterService } from '../../services/rate-limiter.service';
-import { BulkheadService } from '../../services/bulkhead.service';
-import { BulkheadNameType } from '../../types/bulkhead-name-type';
+import { CircuitBreakerService } from '@/services/circuit-breaker.service';
+import { CacheService } from '@/services/cache.service';
+import { RateLimiterService } from '@/services/rate-limiter.service';
+import { BulkheadService } from '@/services/bulkhead.service';
+import { BulkheadNameType } from '@/types/bulkhead-name-type';
 
 @Injectable()
 export class UsersService {
@@ -54,7 +54,7 @@ export class UsersService {
         ttlMs: 10_000,
       },
       async () => {
-        // ⛔ NotFound SHOULD NOT hit circuit breaker
+        // NotFound SHOULD NOT hit circuit breaker
         const user = await this.userRepository.findOne({
           where: { nickname },
         });

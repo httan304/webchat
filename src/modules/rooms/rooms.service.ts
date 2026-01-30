@@ -6,7 +6,7 @@ import {
   ForbiddenException,
   ConflictException,
   HttpException,
-  HttpStatus,
+  HttpStatus, ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -20,6 +20,7 @@ import { CacheService } from '@/services/cache.service';
 import { RateLimiterService } from '@/services/rate-limiter.service';
 import { BulkheadService } from '@/services/bulkhead.service';
 import { BulkheadNameType } from '@/types/bulkhead-name-type';
+import {isUUID} from "class-validator";
 
 @Injectable()
 export class RoomsService {
@@ -56,46 +57,26 @@ export class RoomsService {
     ownerNickname: string,
     description?: string,
   ): Promise<Room> {
-    // 1. Rate Limiting - Prevent spam room creation
-    const rateLimitKey = `room-create:${ownerNickname}`;
-    const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
-      maxRequests: 3, // 3 rooms
-      windowMs: 60_000, // per minute
-    });
+    // Rate limit giữ nguyên
+    const rate = await this.rateLimiter.isAllowed(
+      `room-create:${ownerNickname}`,
+      { maxRequests: 3, windowMs: 60_000 },
+    );
 
     if (!rate.allowed) {
       throw new HttpException(
-        {
-          statusCode: HttpStatus.TOO_MANY_REQUESTS,
-          message: 'Room creation rate limit exceeded',
-          retryAfter: rate.retryAfter,
-        },
+        'Room creation rate limit exceeded',
         HttpStatus.TOO_MANY_REQUESTS,
       );
     }
 
-    // 2. Execute with Circuit Breaker + Bulkhead
-    return this.bulkhead.execute(
-      {
-        name: BulkheadNameType.ChatWrite,
-        maxConcurrency: 50,
-        ttlMs: 15_000,
-      },
-      () =>
-        this.circuitBreaker.execute(
-          'room-create',
-          () => this.performCreateRoom(name, ownerNickname, description),
-          // Fallback
-          async (error: Error) => {
-            this.logger.error(`Circuit breaker fallback for createRoom: ${error.message}`);
-            throw new HttpException(
-              'Room service temporarily unavailable',
-              HttpStatus.SERVICE_UNAVAILABLE,
-            );
-          },
-        ),
+    return this.executeProtected(
+      BulkheadNameType.ChatWrite,
+      'room-create',
+      () => this.performCreateRoom(name, ownerNickname, description),
     );
   }
+
 
   /**
    * Perform create room operation
@@ -107,13 +88,22 @@ export class RoomsService {
     description?: string,
   ): Promise<Room> {
     try {
-      // 1. Check if room name exists
+      const owner = await this.userRepository.findOne({
+        where: { nickname: ownerNickname },
+        select: ['nickname'],
+      });
+
+      if (!owner) {
+        throw new NotFoundException(`User '${ownerNickname}' not found`);
+      }
+
+      // Check room name exists
       const exists = await this.roomRepository.findOne({ where: { name } });
       if (exists) {
         throw new ConflictException('Room name already exists');
       }
 
-      // 2. Create room
+      // Create room
       const room = await this.roomRepository.save(
         this.roomRepository.create({
           name,
@@ -122,7 +112,7 @@ export class RoomsService {
         }),
       );
 
-      // 3. Owner auto-join
+      // Owner auto-join (safe now)
       await this.participantRepository.save(
         this.participantRepository.create({
           roomId: room.id,
@@ -130,29 +120,23 @@ export class RoomsService {
         }),
       );
 
-      // 4. Invalidate caches
+      // Cache invalidate
       await this.cache.deletePattern(`${this.ROOMS_LIST_PREFIX}*`);
       await this.cache.deletePattern(`${this.PARTICIPANT_CACHE_PREFIX}${ownerNickname}:*`);
 
-      // 5. Cache the new room
+      // Cache room
       await this.cache.set(
         `${this.ROOM_CACHE_PREFIX}${room.id}`,
         room,
         this.CACHE_TTL,
       );
 
-      this.logger.log(`Room created: ${room.name} by ${ownerNickname}`);
-
       return room;
     } catch (error) {
-      this.logger.error(
-        `Error creating room: ${error.message}`,
-        error.stack,
-      );
-
       if (
-        error instanceof ConflictException ||
-        error instanceof BadRequestException
+        error?.code === '23503' ||
+        error instanceof NotFoundException ||
+        error instanceof ConflictException
       ) {
         throw error;
       }
@@ -171,26 +155,16 @@ export class RoomsService {
    * ✅ Cache invalidation
    */
   async joinRoom(roomId: string, nickname: string): Promise<void> {
-    return this.bulkhead.execute(
-      {
-        name: BulkheadNameType.ChatWrite,
-        maxConcurrency: 50,
-        ttlMs: 15_000,
-      },
-      () =>
-        this.circuitBreaker.execute(
-          'room-join',
-          () => this.performJoinRoom(roomId, nickname),
-          async (error: Error) => {
-            this.logger.error(`Circuit breaker fallback for joinRoom: ${error.message}`);
-            throw new HttpException(
-              'Room service temporarily unavailable',
-              HttpStatus.SERVICE_UNAVAILABLE,
-            );
-          },
-        ),
+    if (!isUUID(roomId)) {
+      throw new BadRequestException('Invalid room id');
+    }
+    return this.executeProtected(
+      BulkheadNameType.ChatWrite,
+      'room-join',
+      () => this.performJoinRoom(roomId, nickname),
     );
   }
+
 
   /**
    * Perform join room operation
@@ -258,41 +232,17 @@ export class RoomsService {
    * ✅ Bulkhead
    * ✅ Cache invalidation
    */
-  async deleteRoom(roomId: string, requesterNickname: string): Promise<void> {
-    // Rate Limiting
-    const rateLimitKey = `room-delete:${requesterNickname}`;
-    const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
-      maxRequests: 5, // 5 deletions
-      windowMs: 60_000, // per minute
-    });
-
-    if (!rate.allowed) {
-      throw new HttpException(
-        'Room deletion rate limit exceeded',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+  async deleteRoom(roomId: string, requester: string): Promise<void> {
+    if (!isUUID(roomId)) {
+      throw new BadRequestException('Invalid room id');
     }
-
-    return this.bulkhead.execute(
-      {
-        name: BulkheadNameType.ChatWrite,
-        maxConcurrency: 50,
-        ttlMs: 15_000,
-      },
-      () =>
-        this.circuitBreaker.execute(
-          'room-delete',
-          () => this.performDeleteRoom(roomId, requesterNickname),
-          async (error: Error) => {
-            this.logger.error(`Circuit breaker fallback for deleteRoom: ${error.message}`);
-            throw new HttpException(
-              'Room service temporarily unavailable',
-              HttpStatus.SERVICE_UNAVAILABLE,
-            );
-          },
-        ),
+    return this.executeProtected(
+      BulkheadNameType.ChatWrite,
+      'room-delete',
+      () => this.performDeleteRoom(roomId, requester),
     );
   }
+
 
   /**
    * Perform delete room operation
@@ -424,47 +374,18 @@ export class RoomsService {
    * ✅ Bulkhead
    * ✅ Caching
    */
-  async getParticipants(roomId: string, requesterNickname: string) {
-    // Rate Limiting
-    const rateLimitKey = `room-participants:${requesterNickname}:${roomId}`;
-    const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
-      maxRequests: 20,
-      windowMs: 60_000,
-    });
-
-    if (!rate.allowed) {
-      throw new HttpException(
-        'Rate limit exceeded',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
+  async getParticipants(roomId: string, requester: string) {
+    if (!isUUID(roomId)) {
+      throw new BadRequestException('Invalid room id');
     }
-
-    // Cache first
-    const cacheKey = `${this.PARTICIPANT_CACHE_PREFIX}room:${roomId}`;
-
-    return this.cache.getOrSet(
-      cacheKey,
-      () =>
-        this.bulkhead.execute(
-          {
-            name: BulkheadNameType.ChatRead,
-            maxConcurrency: 100,
-            ttlMs: 10_000,
-          },
-          () =>
-            this.circuitBreaker.execute(
-              'room-get-participants',
-              () => this.performGetParticipants(roomId, requesterNickname),
-              // Fallback
-              async () => {
-                this.logger.warn(`Circuit breaker fallback for getParticipants`);
-                return [];
-              },
-            ),
-        ),
-      60, // Cache for 1 minute (participants change frequently)
+    return this.executeProtected(
+      BulkheadNameType.ChatRead,
+      'room-get-participants',
+      () => this.performGetParticipants(roomId, requester),
+      async () => [],
     );
   }
+
 
   /**
    * Perform get participants
@@ -521,63 +442,33 @@ export class RoomsService {
    * ✅ Circuit Breaker
    * ✅ Bulkhead
    */
-  async findOne(roomId: string): Promise<Room> {
-    // Try cache first
-    const cacheKey = `${this.ROOM_CACHE_PREFIX}${roomId}`;
-    let room = await this.cache.get<Room>(cacheKey);
-
-    if (room) {
-      return room;
+  async findOne(roomId: string): Promise<Room | null> {
+    if (!isUUID(roomId)) {
+      throw new BadRequestException('Invalid room id');
     }
+    const cacheKey = `${this.ROOM_CACHE_PREFIX}${roomId}`;
 
-    // Cache miss - query database
-    return this.bulkhead.execute(
-      {
-        name: BulkheadNameType.ChatRead,
-        maxConcurrency: 100,
-        ttlMs: 10_000,
-      },
+    return this.cache.getOrSet(
+      cacheKey,
       () =>
-        this.circuitBreaker.execute(
+        this.executeProtected(
+          BulkheadNameType.ChatRead,
           'room-find-one',
           async () => {
-            try {
-              room = await this.roomRepository.findOne({
-                where: { id: roomId },
-                relations: ['participants', 'participants.user'],
-              });
+            const room = await this.roomRepository.findOne({
+              where: { id: roomId },
+              relations: ['participants'],
+            });
 
-              if (!room) {
-                throw new NotFoundException(`Room ${roomId} not found`);
-              }
-
-              // Cache for future requests
-              await this.cache.set(cacheKey, room, this.CACHE_TTL);
-
-              return room;
-            } catch (error) {
-              if (error instanceof NotFoundException) {
-                throw error;
-              }
-
-              this.logger.error(
-                `Error finding room ${roomId}: ${error.message}`,
-              );
-              throw new HttpException(
-                'Failed to get room',
-                HttpStatus.INTERNAL_SERVER_ERROR,
-              );
+            if (!room) {
+              throw new NotFoundException('Room not found');
             }
+
+            return room;
           },
-          // Fallback
-          async (error: Error) => {
-            this.logger.error(`Circuit breaker fallback for findOne: ${error.message}`);
-            throw new HttpException(
-              'Room service temporarily unavailable',
-              HttpStatus.SERVICE_UNAVAILABLE,
-            );
-          },
+          async () => null, // fallback
         ),
+      this.CACHE_TTL,
     );
   }
 
@@ -588,6 +479,9 @@ export class RoomsService {
    * ✅ Cache invalidation
    */
   async addParticipant(roomId: string, userNickname: string): Promise<void> {
+    if (!isUUID(roomId)) {
+      throw new BadRequestException('Invalid room id');
+    }
     return this.bulkhead.execute(
       {
         name: BulkheadNameType.ChatWrite,
@@ -671,33 +565,117 @@ export class RoomsService {
   }
 
   /**
-   * Get health status
+   * Get rooms user created OR joined
+   * ✅ Circuit Breaker
+   * ✅ Bulkhead
+   * ✅ Caching
    */
-  async getHealthStatus(): Promise<any> {
+  async getMyRooms(nickname: string): Promise<Room[]> {
+    const cacheKey = `${this.ROOMS_LIST_PREFIX}my:${nickname}`;
+
+    return this.cache.getOrSet(
+      cacheKey,
+      () =>
+        this.executeProtected(
+          BulkheadNameType.ChatRead,
+          'room-get-my',
+          () => this.performGetMyRooms(nickname),
+          async () => [],
+        ),
+      this.CACHE_TTL,
+    );
+  }
+
+  /**
+   * Perform get my rooms
+   * @param nickname
+   * @private
+   */
+  private async performGetMyRooms(nickname: string): Promise<Room[]> {
     try {
-      return {
-        status: 'healthy',
-        circuitBreaker: await this.circuitBreaker.getHealthStatus(),
-        bulkhead: {
-          write: await this.bulkhead.getStatus({
-            name: BulkheadNameType.ChatWrite,
-            maxConcurrency: 50,
-          }),
-          read: await this.bulkhead.getStatus({
-            name: BulkheadNameType.ChatRead,
-            maxConcurrency: 100,
-          }),
-        },
-        cache: this.cache.getStats(),
-        timestamp: new Date().toISOString(),
-      };
+      const createdRooms = await this.roomRepository.find({
+        where: { creatorNickname: nickname },
+      });
+      console.log('createdRooms', createdRooms);
+      const joinedRoomIds = await this.participantRepository
+        .createQueryBuilder('p')
+        .select('DISTINCT p.roomId', 'roomId')
+        .where('p.nickname = :nickname', { nickname })
+        .getRawMany<{ roomId: string }>();
+
+      const joinedIds = joinedRoomIds.map(r => r.roomId);
+
+      let joinedRooms: Room[] = [];
+      if (joinedIds.length > 0) {
+        joinedRooms = await this.roomRepository.findByIds(joinedIds);
+      }
+      const roomMap = new Map<string, Room>();
+
+      for (const room of createdRooms) {
+        roomMap.set(room.id, room);
+      }
+
+      for (const room of joinedRooms) {
+        roomMap.set(room.id, room);
+      }
+
+      return Array.from(roomMap.values());
     } catch (error) {
-      this.logger.error(`Error getting health status: ${error.message}`);
-      return {
-        status: 'degraded',
-        error: error.message,
-        timestamp: new Date().toISOString(),
-      };
+      this.logger.error(
+        `Error getting my rooms for ${nickname}: ${error.message}`,
+        error.stack,
+      );
+
+      throw new HttpException(
+        'Failed to get user rooms',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
+
+
+  private isBypassError(error: any): boolean {
+    return (
+      error instanceof NotFoundException ||
+      error instanceof ConflictException ||
+      error instanceof BadRequestException ||
+      error instanceof ForbiddenException ||
+      (error instanceof HttpException && error.getStatus() < 500)
+    );
+  }
+
+  private async executeProtected<T>(
+    bulkheadName: BulkheadNameType,
+    cbName: string,
+    task: () => Promise<T>,
+    fallback?: () => Promise<T>,
+  ): Promise<T> {
+    return this.bulkhead.execute(
+      {
+        name: bulkheadName,
+        maxConcurrency:
+          bulkheadName === BulkheadNameType.ChatWrite ? 50 : 100,
+        ttlMs: 10_000,
+      },
+      async () =>
+        this.circuitBreaker.execute(
+          cbName,
+          task,
+          async (err) => {
+            // Business error
+            if (this.isBypassError(err)) {
+              throw err;
+            }
+
+            // Infra error → fallback / 503
+            if (fallback) return fallback();
+
+            throw new ServiceUnavailableException(
+              'Service temporarily unavailable',
+            );
+          },
+        ),
+    );
+  }
+
 }

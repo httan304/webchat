@@ -4,7 +4,7 @@ import {
 	ForbiddenException,
 	Logger,
 	HttpException,
-	HttpStatus,
+	HttpStatus, ConflictException, BadRequestException, ServiceUnavailableException,
 } from '@nestjs/common';
 import {InjectRepository} from '@nestjs/typeorm';
 import {MoreThan, Repository} from 'typeorm';
@@ -19,6 +19,7 @@ import {CacheService} from '@/services/cache.service';
 import {RateLimiterService} from '@/services/rate-limiter.service';
 import {BulkheadService} from '@/services/bulkhead.service';
 import {BulkheadNameType} from '@/types/bulkhead-name-type';
+import {isUUID} from "class-validator";
 
 @Injectable()
 export class ChatService {
@@ -51,19 +52,15 @@ export class ChatService {
 	 * ✅ Caching invalidation
 	 */
 	async sendMessage(data: SendMessageDto): Promise<Message> {
-		const {roomId, nickname} = data;
-
-		// 1. Rate Limiting - Prevent spam
+		const { roomId, nickname } = data;
+		this.assertUUID(roomId, 'roomId');
 		const rateLimitKey = `chat-send:${nickname}:${roomId}`;
 		const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
-			maxRequests: 5,  // 5 messages
-			windowMs: 10_000, // per 10 seconds
+			maxRequests: 5,
+			windowMs: 10_000,
 		});
 
 		if (!rate.allowed) {
-			this.logger.warn(
-				`Rate limit exceeded for ${nickname} in room ${roomId}`,
-			);
 			throw new HttpException(
 				{
 					statusCode: HttpStatus.TOO_MANY_REQUESTS,
@@ -74,28 +71,10 @@ export class ChatService {
 			);
 		}
 
-		// 2. Execute with Circuit Breaker + Bulkhead
-		return this.bulkhead.execute(
-			{
-				name: BulkheadNameType.ChatWrite,
-				maxConcurrency: 50,
-				ttlMs: 15_000,
-			},
-			() =>
-				this.circuitBreaker.execute(
-					'chat-send-message',
-					() => this.performSendMessage(data),
-					// Fallback function
-					async (error: Error) => {
-						this.logger.error(
-							`Circuit breaker fallback triggered for sendMessage: ${error.message}`,
-						);
-						throw new HttpException(
-							'Chat service temporarily unavailable. Please try again.',
-							HttpStatus.SERVICE_UNAVAILABLE,
-						);
-					},
-				),
+		return this.executeProtected(
+			BulkheadNameType.ChatWrite,
+			'chat-send-message',
+			() => this.performSendMessage(data),
 		);
 	}
 
@@ -105,7 +84,7 @@ export class ChatService {
 	 */
 	private async performSendMessage(data: SendMessageDto): Promise<Message> {
 		const {roomId, nickname, content} = data;
-
+		this.assertUUID(roomId, 'messageId');
 		try {
       const room = await this.roomRepository.findOne({where: {id: roomId}, select: ['id']})
       if (!room) {
@@ -177,30 +156,15 @@ export class ChatService {
 	 * ✅ Caching
 	 */
 	async editLastMessage(data: EditMessageDto): Promise<Message> {
-		// Execute with Circuit Breaker + Bulkhead
-		return this.bulkhead.execute(
-			{
-				name: BulkheadNameType.ChatWrite,
-				maxConcurrency: 50,
-				ttlMs: 15_000,
-			},
-			() =>
-				this.circuitBreaker.execute(
-					'chat-edit-message',
-					() => this.performEditMessage(data),
-					// Fallback function
-					async (error: Error) => {
-						this.logger.error(
-							`Circuit breaker fallback triggered for editMessage: ${error.message}`,
-						);
-						throw new HttpException(
-							'Chat service temporarily unavailable. Please try again.',
-							HttpStatus.SERVICE_UNAVAILABLE,
-						);
-					},
-				),
+		this.assertUUID(data.messageId, 'messageId');
+		this.assertUUID(data.roomId, 'roomId');
+		return this.executeProtected(
+			BulkheadNameType.ChatWrite,
+			'chat-edit-message',
+			() => this.performEditMessage(data),
 		);
 	}
+
 
 	/**
 	 * Perform edit message operation
@@ -286,152 +250,30 @@ export class ChatService {
 	 * ✅ Caching invalidation
 	 */
 	async deleteMessage(messageId: string, nickname: string): Promise<void> {
-		return this.bulkhead.execute(
-			{
-				name: BulkheadNameType.ChatWrite,
-				maxConcurrency: 50,
-				ttlMs: 15_000,
-			},
-			() =>
-				this.circuitBreaker.execute(
-					'chat-delete-message',
-					async () => {
-						try {
-							// 1. Get message (try cache first)
-							let message = await this.cache.get<Message>(
-								`${this.MESSAGE_CACHE_PREFIX}${messageId}`,
-							);
-
-							if (!message) {
-								message = await this.messageRepository.findOne({
-									where: {id: messageId},
-								});
-							}
-
-							if (!message) {
-								throw new NotFoundException('Message not found');
-							}
-
-							// 2. Check ownership
-							if (message.senderNickname !== nickname) {
-								throw new ForbiddenException(
-									'You can only delete your own messages',
-								);
-							}
-
-							// 3. Delete message
-							await this.messageRepository.remove(message);
-
-							// 4. Invalidate caches
-							await this.cache.delete(
-								`${this.MESSAGE_CACHE_PREFIX}${messageId}`,
-							);
-							await this.cache.deletePattern(
-								`${this.ROOM_MESSAGES_PREFIX}${message.roomId}*`,
-							);
-
-							this.logger.log(
-								`Message deleted: ${messageId} by ${nickname}`,
-							);
-						} catch (error) {
-							this.logger.error(
-								`Error deleting message ${messageId}: ${error.message}`,
-								error.stack,
-							);
-
-							if (
-								error instanceof ForbiddenException ||
-								error instanceof NotFoundException
-							) {
-								throw error;
-							}
-
-							throw new HttpException(
-								'Failed to delete message',
-								HttpStatus.INTERNAL_SERVER_ERROR,
-							);
-						}
-					},
-					// Fallback
-					async (error: Error) => {
-						this.logger.error(
-							`Circuit breaker fallback for deleteMessage: ${error.message}`,
-						);
-						throw new HttpException(
-							'Chat service temporarily unavailable',
-							HttpStatus.SERVICE_UNAVAILABLE,
-						);
-					},
-				),
+		this.assertUUID(messageId, 'messageId');
+		return this.executeProtected(
+			BulkheadNameType.ChatWrite,
+			'chat-delete-message',
+			() => this.performDeleteMessage(messageId, nickname),
 		);
 	}
 
-	/**
-	 * Get participants of a room
-	 * @param roomId
-	 */
-	async getRoomParticipants(roomId: string): Promise<any[]> {
-		const cacheKey = `${this.PARTICIPANT_CACHE_PREFIX}room:${roomId}`;
-		const cached = await this.cache.get<any[]>(cacheKey);
-		if (cached) return cached;
+	private async performDeleteMessage(messageId: string, nickname: string): Promise<void> {
+		const message =
+			(await this.cache.get<Message>(`${this.MESSAGE_CACHE_PREFIX}${messageId}`)) ??
+			(await this.messageRepository.findOne({ where: { id: messageId } }));
 
-		const participants = await this.participantRepository
-			.createQueryBuilder('participant')
-			.leftJoinAndSelect('participant.user', 'user')  // Explicit join
-			.where('participant.roomId = :roomId', {roomId})
-			.select([
-				'participant.id',
-				'participant.roomId',
-				'participant.nickname',
-				'participant.joinedAt',
-				'user.id',
-				'user.nickname',
-				'user.isConnected',
-				'user.lastSeen',
-			])
-			.getMany();
-
-		const result = participants.map((p) => ({
-			id: p.user?.id || null,
-			nickname: p.nickname,
-			isConnected: p.user?.isConnected || false,
-			lastSeen: p.user?.lastSeen || null,
-			joinedAt: p.joinedAt,
-		}));
-
-		await this.cache.set(cacheKey, result, 60);
-		return result;
-	}
-
-	/**
-	 * Get health status of chat service
-	 */
-	async getHealthStatus(): Promise<any> {
-		try {
-			return {
-				status: 'healthy',
-				circuitBreaker: await this.circuitBreaker.getHealthStatus(),
-				bulkhead: {
-					write: await this.bulkhead.getStatus({
-						name: BulkheadNameType.ChatWrite,
-						maxConcurrency: 50,
-					}),
-					read: await this.bulkhead.getStatus({
-						name: BulkheadNameType.ChatRead,
-						maxConcurrency: 100,
-					}),
-				},
-				cache: this.cache.getStats(),
-				timestamp: new Date().toISOString(),
-			};
-		} catch (error) {
-			this.logger.error(`Error getting health status: ${error.message}`);
-			return {
-				status: 'degraded',
-				error: error.message,
-				timestamp: new Date().toISOString(),
-			};
+		if (!message) throw new NotFoundException('Message not found');
+		if (message.senderNickname !== nickname) {
+			throw new ForbiddenException('You can only delete your own messages');
 		}
+
+		await this.messageRepository.remove(message);
+
+		await this.cache.delete(`${this.MESSAGE_CACHE_PREFIX}${messageId}`);
+		await this.cache.deletePattern(
+			`${this.ROOM_MESSAGES_PREFIX}${message.roomId}*`,
+		);
 	}
 
   /**
@@ -455,7 +297,8 @@ export class ChatService {
       totalPages: number;
     };
   }> {
-    // 1. Rate Limiting
+		this.assertUUID(roomId, 'roomId');
+		// 1. Rate Limiting
     const rateLimitKey = `chat-get-messages:${roomId}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 30, // 30 requests
@@ -476,38 +319,20 @@ export class ChatService {
     // 3. Cache first
     const cacheKey = `${this.ROOM_MESSAGES_PREFIX}${roomId}:p${sanitizedPage}:l${sanitizedLimit}`;
 
-    return this.cache.getOrSet(
-      cacheKey,
-      () =>
-        this.bulkhead.execute(
-          {
-            name: BulkheadNameType.ChatRead,
-            maxConcurrency: 100,
-            ttlMs: 10_000,
-          },
-          () =>
-            this.circuitBreaker.execute(
-              'chat-get-messages',
-              () => this.performGetMessages(roomId, sanitizedPage, sanitizedLimit),
-              // Fallback - return empty result
-              async (error: Error) => {
-                this.logger.error(
-                  `Circuit breaker fallback for getMessages: ${error.message}`,
-                );
-                return {
-                  data: [],
-                  meta: {
-                    total: 0,
-                    page: sanitizedPage,
-                    limit: sanitizedLimit,
-                    totalPages: 0,
-                  },
-                };
-              },
-            ),
-        ),
-      this.CACHE_TTL,
-    );
+		return this.cache.getOrSet(
+			cacheKey,
+			() =>
+				this.executeProtected(
+					BulkheadNameType.ChatRead,
+					'chat-get-messages',
+					() => this.performGetMessages(roomId, page, limit),
+					async () => ({
+						data: [],
+						meta: { total: 0, page, limit, totalPages: 0 },
+					}),
+				),
+			this.CACHE_TTL,
+		);
   }
 
   /**
@@ -528,7 +353,8 @@ export class ChatService {
     };
   }> {
     try {
-      // 1. Verify room exists
+			this.assertUUID(roomId, 'roomId');
+			// 1. Verify room exists
       const room = await this.roomRepository.findOne({
         where: { id: roomId },
         select: ['id']
@@ -613,7 +439,8 @@ export class ChatService {
       totalPages: number;
     };
   }> {
-    const rateLimitKey = `chat-get-messages-chrono:${roomId}`;
+		this.assertUUID(roomId, 'roomId');
+		const rateLimitKey = `chat-get-messages-chrono:${roomId}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 30,
       windowMs: 60_000,
@@ -689,7 +516,8 @@ export class ChatService {
     since: Date,
     limit: number = 100,
   ): Promise<Message[]> {
-    const rateLimitKey = `chat-get-messages-since:${roomId}`;
+		this.assertUUID(roomId, 'roomId');
+		const rateLimitKey = `chat-get-messages-since:${roomId}`;
     const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
       maxRequests: 20,
       windowMs: 60_000,
@@ -742,4 +570,55 @@ export class ChatService {
       );
     }
   }
+
+	private isBypassError(error: any): boolean {
+		return (
+			error instanceof NotFoundException ||
+			error instanceof ConflictException ||
+			error instanceof BadRequestException ||
+			error instanceof ForbiddenException ||
+			(error instanceof HttpException && error.getStatus() < 500)
+		);
+	}
+
+	private async executeProtected<T>(
+		bulkheadName: BulkheadNameType,
+		cbName: string,
+		task: () => Promise<T>,
+		fallback?: () => Promise<T>,
+	): Promise<T> {
+		return this.bulkhead.execute(
+			{
+				name: bulkheadName,
+				maxConcurrency:
+					bulkheadName === BulkheadNameType.ChatWrite ? 50 : 100,
+				ttlMs: 10_000,
+			},
+			async () =>
+				this.circuitBreaker.execute(
+					cbName,
+					task,
+					async (err) => {
+						// Business error → bypass
+						if (this.isBypassError(err)) {
+							throw err;
+						}
+
+						// Infra error → fallback
+						if (fallback) return fallback();
+
+						throw new ServiceUnavailableException(
+							'Service temporarily unavailable',
+						);
+					},
+				),
+		);
+	}
+
+	private assertUUID(id: string, name = 'id') {
+		if (!isUUID(id)) {
+			throw new BadRequestException(`${name} is not a valid UUID`);
+		}
+	}
+
 }

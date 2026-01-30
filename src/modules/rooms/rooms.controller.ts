@@ -63,7 +63,7 @@ export class RoomsController {
 		description: 'Room found',
 		type: Room,
 	})
-	async findOne(@Param('id') id: string): Promise<Room> {
+	async findOne(@Param('id') id: string): Promise<Room | null> {
 		return this.roomsService.findOne(id);
 	}
 
@@ -157,4 +157,25 @@ export class RoomsController {
 		);
 		return { message: `Room ${roomId} deleted successfully` };
 	}
+
+	@Get('my/:nickname')
+	@ApiOperation({
+		summary: 'Get rooms created by user and rooms user has joined',
+		description:
+			'Return list of rooms that the user created OR has participated in',
+	})
+	@ApiParam({
+		name: 'nickname',
+		type: String,
+		example: 'alice',
+	})
+	@ApiResponse({
+		status: 200,
+		description: 'List of rooms',
+		type: [Room],
+	})
+	getMyRooms(@Param('nickname') nickname: string) {
+		return this.roomsService.getMyRooms(nickname);
+	}
+
 }
