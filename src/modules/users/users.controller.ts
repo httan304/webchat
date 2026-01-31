@@ -35,8 +35,9 @@ export class UsersController {
 	constructor(private readonly usersService: UsersService) {}
 
 	/**
-	 * Create a new user
-	 * POST /users
+	 * Create new user
+	 * @param createUserDto
+	 * @param req
 	 */
 	@Post()
 	@HttpCode(HttpStatus.CREATED)
@@ -97,35 +98,8 @@ export class UsersController {
 	@ApiResponse({ status: 404, description: 'User not found' })
 	async findByNickname(
 		@Param('nickname') nickname: string,
-	): Promise<User> {
+	): Promise<User | null> {
 		return this.usersService.findByNickname(nickname);
-	}
-
-	/**
-	 * Get user connection status
-	 * GET /users/:nickname/status
-	 */
-	@Get(':nickname/status')
-	@HttpCode(HttpStatus.OK)
-	@ApiOperation({ summary: 'Get user connection status' })
-	@ApiParam({ name: 'nickname', example: 'alice' })
-	@ApiResponse({
-		status: 200,
-		schema: {
-			example: {
-				nickname: 'alice',
-				isConnected: true,
-			},
-		},
-	})
-	async getConnectionStatus(
-		@Param('nickname') nickname: string,
-	): Promise<{ nickname: string; isConnected: boolean }> {
-		const user = await this.usersService.findByNickname(nickname);
-		return {
-			nickname: user.nickname,
-			isConnected: user.isConnected,
-		};
 	}
 
 	/**

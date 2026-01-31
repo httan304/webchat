@@ -3,10 +3,8 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { redisStore } from 'cache-manager-redis-yet';
 import type { RedisClientOptions } from 'redis';
 
-// Import Redis Module
 import { RedisModule } from '@/infrastructure/redis/redis.module';
 
-// Import Services
 import { CircuitBreakerService } from './circuit-breaker.service';
 import { CacheService } from './cache.service';
 import { RateLimiterService } from './rate-limiter.service';

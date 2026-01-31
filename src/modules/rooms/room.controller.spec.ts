@@ -127,7 +127,7 @@ describe('RoomsController', () => {
 		it('should add participant to room', async () => {
 			mockRoomsService.joinRoom.mockResolvedValue(undefined);
 
-			const result = await controller.addParticipant(
+			const result = await controller.joinRoom(
 				'room-uuid-123',
 				'bob',
 			);
@@ -148,7 +148,7 @@ describe('RoomsController', () => {
 			);
 
 			await expect(
-				controller.addParticipant('room-uuid-123', 'nonexistent'),
+				controller.joinRoom('room-uuid-123', 'nonexistent'),
 			).rejects.toThrow('User not found');
 		});
 	});

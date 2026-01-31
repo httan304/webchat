@@ -7,11 +7,13 @@ import { Room } from '../rooms/entities/room.entity';
 import { RoomParticipant } from '../rooms/entities/room-participant.entity';
 import { UsersModule } from '../users/users.module';
 import {ChatController} from "@/modules/chat/chat.controller";
+import {RoomsModule} from "@/modules/rooms/rooms.module";
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Message, Room, RoomParticipant]),
     UsersModule,
+    RoomsModule,
   ],
   providers: [
     ChatGateway,

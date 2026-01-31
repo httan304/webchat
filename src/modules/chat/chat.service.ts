@@ -52,7 +52,8 @@ export class ChatService {
 	 * ✅ Caching invalidation
 	 */
 	async sendMessage(data: SendMessageDto): Promise<Message> {
-		const { roomId, nickname } = data;
+		this.logger.debug('sendMessage', data);
+		const { roomId, nickname, content } = data;
 		this.assertUUID(roomId, 'roomId');
 		const rateLimitKey = `chat-send:${nickname}:${roomId}`;
 		const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
@@ -65,7 +66,7 @@ export class ChatService {
 				{
 					statusCode: HttpStatus.TOO_MANY_REQUESTS,
 					message: 'Message rate limit exceeded',
-					retryAfter: rate.retryAfter,
+					retryAfter: rate.retryAfterMs,
 				},
 				HttpStatus.TOO_MANY_REQUESTS,
 			);
@@ -83,8 +84,9 @@ export class ChatService {
 	 * @private
 	 */
 	private async performSendMessage(data: SendMessageDto): Promise<Message> {
+		this.logger.debug('performSendMessage', data);
 		const {roomId, nickname, content} = data;
-		this.assertUUID(roomId, 'messageId');
+		this.assertUUID(roomId, 'roomId');
 		try {
       const room = await this.roomRepository.findOne({where: {id: roomId}, select: ['id']})
       if (!room) {
@@ -571,14 +573,10 @@ export class ChatService {
     }
   }
 
-	private isBypassError(error: any): boolean {
-		return (
-			error instanceof NotFoundException ||
-			error instanceof ConflictException ||
-			error instanceof BadRequestException ||
-			error instanceof ForbiddenException ||
-			(error instanceof HttpException && error.getStatus() < 500)
-		);
+	private assertUUID(id: string, name = 'id') {
+		if (!isUUID(id)) {
+			throw new BadRequestException(`${name} is not a valid UUID`);
+		}
 	}
 
 	private async executeProtected<T>(
@@ -591,34 +589,29 @@ export class ChatService {
 			{
 				name: bulkheadName,
 				maxConcurrency:
-					bulkheadName === BulkheadNameType.ChatWrite ? 50 : 100,
+					bulkheadName === BulkheadNameType.ChatRead ? 50 : 100,
 				ttlMs: 10_000,
 			},
-			async () =>
-				this.circuitBreaker.execute(
-					cbName,
-					task,
-					async (err) => {
-						// Business error → bypass
-						if (this.isBypassError(err)) {
-							throw err;
-						}
+			async () => {
+				try {
+					return await this.circuitBreaker.execute(
+						{
+							name: cbName,
+							failureThreshold: 5,
+							openDurationMs: 30_000,
+							halfOpenMaxAttempts: 1,
+						},
+						task,
+					);
+				} catch (err) {
+					if (fallback) {
+						return fallback();
+					}
 
-						// Infra error → fallback
-						if (fallback) return fallback();
-
-						throw new ServiceUnavailableException(
-							'Service temporarily unavailable',
-						);
-					},
-				),
+					throw err;
+				}
+			},
 		);
-	}
-
-	private assertUUID(id: string, name = 'id') {
-		if (!isUUID(id)) {
-			throw new BadRequestException(`${name} is not a valid UUID`);
-		}
 	}
 
 }

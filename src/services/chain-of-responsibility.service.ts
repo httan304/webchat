@@ -216,10 +216,6 @@ export class RateLimitingHandler extends RequestHandler {
             max: this.config.maxRequests,
         };
 
-        this.logger.debug(
-          `[${context.traceId}] Rate limiting checked: ${entry.count}/${this.config.maxRequests}`,
-        );
-
         return context;
     }
 
@@ -272,9 +268,6 @@ export class RequestProcessingPipeline {
 
         try {
             context = await this.tracingHandler.handle(request, context);
-            this.logger.debug(
-              `[${context.traceId}] Request processed successfully`,
-            );
             return context;
         } catch (error) {
             this.logger.error(

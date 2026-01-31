@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Mini Chat WebSocket</title>
+
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f4f6f8;
+            padding: 20px;
+        }
+
+        h2 {
+            margin-top: 0;
+        }
+
+        .panel {
+            background: #fff;
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+        }
+
+        .container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 16px;
+        }
+
+        input {
+            width: 100%;
+            padding: 6px;
+            margin-bottom: 6px;
+        }
+
+        button {
+            padding: 6px 10px;
+            margin-right: 6px;
+            cursor: pointer;
+        }
+
+        #messages,
+        #room-activity {
+            height: 240px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 8px;
+            background: #fafafa;
+            font-size: 14px;
+        }
+
+        .msg {
+            margin-bottom: 6px;
+        }
+
+        .system {
+            font-style: italic;
+            color: #666;
+        }
+
+        .join {
+            color: green;
+        }
+
+        .leave {
+            color: #c0392b;
+        }
+
+        .typing {
+            color: #2980b9;
+            font-style: italic;
+        }
+    </style>
+</head>
+
+<body>
+
+<h2>💬 Mini WebSocket Chat</h2>
+
+<div class="panel">
+    <input id="nickname" placeholder="Nickname" />
+    <button onclick="connect()">Connect</button>
+    <button onclick="disconnect()">Disconnect</button>
+</div>
+
+<div class="panel">
+    <input id="roomId" placeholder="Room ID" />
+    <button onclick="joinRoom()">Join Room</button>
+    <button onclick="leaveRoom()">Leave Room</button>
+</div>
+
+<div class="container">
+    <div class="panel">
+        <h3>Messages</h3>
+        <div id="messages"></div>
+
+        <div id="typing-indicator"></div>
+
+        <input id="messageInput" placeholder="Type a message..." />
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <div class="panel">
+        <h3>Room Activity</h3>
+        <div id="room-activity"></div>
+    </div>
+</div>
+
+<script>
+	let socket = null;
+	let currentRoom = null;
+	let typingTimeout = null;
+	const typingUsers = new Set();
+	function logMessage(html) {
+		const el = document.getElementById('messages');
+		el.innerHTML += `<div class="msg">${html}</div>`;
+		el.scrollTop = el.scrollHeight;
+	}
+
+	function logActivity(text, cls = '') {
+		const el = document.getElementById('room-activity');
+		el.innerHTML += `<div class="${cls}">• ${text}</div>`;
+		el.scrollTop = el.scrollHeight;
+	}
+
+	function renderTyping() {
+		const el = document.getElementById('typing-indicator');
+		if (typingUsers.size === 0) {
+			el.innerHTML = '';
+			return;
+		}
+		el.innerHTML = `<div class="typing">
+      ${Array.from(typingUsers).join(', ')} typing...
+    </div>`;
+	}
+	function connect() {
+		const nickname = document.getElementById('nickname').value;
+		if (!nickname) return alert('Enter nickname');
+
+		socket = io('ws://localhost:3000/chat', {
+			query: { nickname }
+		});
+
+		socket.on('connect', () => {
+			logActivity(`${nickname} connected`, 'join');
+		});
+
+		socket.on('disconnect', () => {
+			logActivity(`${nickname} disconnected`, 'leave');
+		});
+
+		socket.on('user:connected', (data) => {
+			logActivity(`${data.nickname} connected`, 'join');
+		});
+
+		socket.on('user:disconnected', (data) => {
+			logActivity(`${data.nickname} disconnected`, 'leave');
+		});
+
+		socket.on('user_joined_room', (data) => {
+			logActivity(`${data.nickname} joined room`, 'join');
+		});
+
+		socket.on('user_left_room', (data) => {
+			typingUsers.delete(data.nickname);
+			renderTyping();
+			logActivity(`${data.nickname} left room`, 'leave');
+		});
+
+		socket.on('user:typing', (data) => {
+			typingUsers.add(data.nickname);
+			renderTyping();
+		});
+
+		socket.on('user:stopTyping', (data) => {
+			typingUsers.delete(data.nickname);
+			renderTyping();
+		});
+
+		socket.on('message:new', (data) => {
+			logMessage(`<b>${data.nickname}</b>: ${data.content}`);
+		});
+	}
+
+	function disconnect() {
+		if (socket) {
+			socket.disconnect();
+			socket = null;
+		}
+	}
+	function joinRoom() {
+		const roomId = document.getElementById('roomId').value;
+		if (!roomId) return alert('Enter room ID');
+
+		currentRoom = roomId;
+		typingUsers.clear();
+		renderTyping();
+		document.getElementById('room-activity').innerHTML = '';
+
+		socket.emit('room:join', { roomId });
+		logActivity(`You joined room ${roomId}`, 'system');
+	}
+
+	function leaveRoom() {
+		if (!currentRoom) return;
+
+		socket.emit('room:leave', { roomId: currentRoom });
+		typingUsers.clear();
+		renderTyping();
+		logActivity(`You left room ${currentRoom}`, 'system');
+		currentRoom = null;
+	}
+	function sendMessage() {
+		const input = document.getElementById('messageInput');
+		const content = input.value;
+		if (!content || !currentRoom) return;
+
+		socket.emit('message:send', {
+			roomId: currentRoom,
+			content
+		});
+
+		input.value = '';
+		emitStopTyping();
+	}
+	const inputEl = document.getElementById('messageInput');
+
+	inputEl.addEventListener('input', () => {
+		if (!currentRoom) return;
+
+		socket.emit('user:typing', { roomId: currentRoom });
+
+		clearTimeout(typingTimeout);
+		typingTimeout = setTimeout(() => {
+			emitStopTyping();
+		}, 800);
+	});
+
+	function emitStopTyping() {
+		if (!currentRoom) return;
+		socket.emit('user:stopTyping', { roomId: currentRoom });
+	}
+</script>
+
+</body>
+</html>

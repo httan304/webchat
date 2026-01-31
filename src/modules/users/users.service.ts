@@ -1,32 +1,23 @@
-import {
-  Injectable,
-  ConflictException,
-  NotFoundException,
-  Logger,
-  HttpException,
-  HttpStatus,
-  ServiceUnavailableException,
-} from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, ILike } from 'typeorm';
-import { User } from './entities/user.entity';
-import { CreateUserDto } from './dto/create-user.dto';
-import { FindAllDto } from './dto/find-all-user.dto';
-import { FindAllUsersResponseDto } from './dto/find-all-user-response.dto';
+import {ConflictException, HttpException, HttpStatus, Injectable, Logger, NotFoundException,} from '@nestjs/common';
+import {InjectRepository} from '@nestjs/typeorm';
+import {ILike, Repository} from 'typeorm';
+import {User} from './entities/user.entity';
+import {CreateUserDto} from './dto/create-user.dto';
+import {FindAllDto} from './dto/find-all-user.dto';
+import {FindAllUsersResponseDto} from './dto/find-all-user-response.dto';
 
-import { CircuitBreakerService } from '@/services/circuit-breaker.service';
-import { CacheService } from '@/services/cache.service';
-import { RateLimiterService } from '@/services/rate-limiter.service';
-import { BulkheadService } from '@/services/bulkhead.service';
-import { BulkheadNameType } from '@/types/bulkhead-name-type';
+import {CircuitBreakerService} from '@/services/circuit-breaker.service';
+import {CacheService} from '@/services/cache.service';
+import {RateLimiterService} from '@/services/rate-limiter.service';
+import {BulkheadService} from '@/services/bulkhead.service';
+import {BulkheadNameType} from '@/types/bulkhead-name-type';
+import {CACHED_USER_KEY, CACHED_RATE_LIMIT_KEY} from "@/types/cached-key.type";
 
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
 
   private readonly CACHE_TTL = 300;
-  private readonly USER_CACHE_PREFIX = 'user:';
-  private readonly USERS_LIST_PREFIX = 'users:list:';
 
   constructor(
     @InjectRepository(User)
@@ -47,45 +38,40 @@ export class UsersService {
     nickname: string,
     isConnected: boolean,
   ): Promise<void> {
-    return this.bulkhead.execute(
-      {
-        name: BulkheadNameType.ChatWrite,
-        maxConcurrency: 50,
-        ttlMs: 10_000,
-      },
-      async () => {
-        // NotFound SHOULD NOT hit circuit breaker
-        const user = await this.userRepository.findOne({
-          where: { nickname },
-        });
-
-        if (!user) {
-          this.logger.warn(`User ${nickname} not found for status update`);
-          return;
-        }
-
-        return this.circuitBreaker.execute(
-          'user-update-connection',
-          async () => {
-            user.isConnected = isConnected;
-            user.lastSeen = new Date();
-
-            await this.userRepository.save(user);
-            await this.cache.delete(`${this.USER_CACHE_PREFIX}${nickname}`);
-
-            this.logger.debug(
-              `🔌 ${nickname} → ${isConnected ? 'online' : 'offline'}`,
-            );
-          },
-          async (error: Error) => {
-            this.logger.warn(
-              `Circuit breaker fallback updateConnectionStatus: ${error.message}`,
-            );
-          },
-        );
-      },
+    this.logger.debug('updateConnectionStatus', nickname, isConnected)
+    return this.executeProtected(
+      BulkheadNameType.UserWrite,
+      'user-update-connection',
+      () => this.updateUserStatus(nickname, isConnected),
     );
   }
+
+  async updateUserStatus(nickname: string, isConnected: boolean): Promise<any> {
+    const user = await this.userRepository.findOne({
+      where: { nickname },
+    });
+
+    if (!user) {
+      this.logger.warn(`User ${nickname} not found for status update`);
+      // create new user
+      this.logger.debug(
+        `${nickname} → ${isConnected ? 'online' : 'offline'}`,
+      );
+      return await this.userRepository.save({
+        isConnected,
+        nickname: nickname,
+        lastSeen: new Date(),
+      });
+
+    } else {
+      const updated = {...user, isConnected};
+      this.logger.debug(
+        `${nickname} → ${isConnected ? 'online' : 'offline'}`,
+      );
+      return await this.userRepository.save(updated);
+    }
+  }
+
 
   /**
    * Create a new user
@@ -93,7 +79,7 @@ export class UsersService {
    */
   async create(dto: CreateUserDto): Promise<User> {
     const rate = await this.rateLimiter.isAllowed(
-      `user-create:${dto.nickname}`,
+      `${CACHED_RATE_LIMIT_KEY.USER_RATE_LIMIT}:${dto.nickname}`,
       { maxRequests: 3, windowMs: 60_000 },
     );
 
@@ -104,11 +90,19 @@ export class UsersService {
       );
     }
 
-    return this.executeProtected(
-      BulkheadNameType.ChatWrite,
+    const saved = await  this.executeProtected(
+      BulkheadNameType.UserCreate,
       'user-create',
       () => this.performCreate(dto),
     );
+    await this.cache.set(
+      `${CACHED_USER_KEY.USER_CREATED}:${saved.nickname}`,
+      saved,
+      this.CACHE_TTL,
+    );
+
+    await this.cache.deletePattern(`${CACHED_USER_KEY.USER_LIST}*`);
+    return saved
   }
 
   /**
@@ -130,46 +124,33 @@ export class UsersService {
       isConnected: false,
     });
 
-    const saved = await this.userRepository.save(user);
-
-    await this.cache.set(
-      `${this.USER_CACHE_PREFIX}${saved.nickname}`,
-      saved,
-      this.CACHE_TTL,
-    );
-
-    await this.cache.deletePattern(`${this.USERS_LIST_PREFIX}*`);
-
-    return saved;
+    return await this.userRepository.save(user);
   }
 
   /**
    * Find user by nickname
    * @param nickname
    */
-  async findByNickname(nickname: string): Promise<User> {
-    const cacheKey = `${this.USER_CACHE_PREFIX}${nickname}`;
+  async findByNickname(nickname: string): Promise<User | null> {
+    this.logger.debug('findByNickname', nickname);
+    const cacheKey = `${CACHED_USER_KEY.USER_CREATED}:${nickname}`;
+    const user = await this.cache.get<User>(cacheKey);
+    if (user) return user
 
-    return this.cache.getOrSet(
-      cacheKey,
-      () =>
-        this.executeProtected(
-          BulkheadNameType.ChatRead,
-          'user-find-by-nickname',
-          async () => {
-            const user = await this.userRepository.findOne({
-              where: { nickname: ILike(nickname) },
-            });
+    return await this.executeProtected(
+      BulkheadNameType.UserRead,
+      'user-find-by-nickname',
+      async () => {
+        const user = await this.userRepository.findOne({
+          where: {nickname: ILike(nickname)},
+          select: ['id', 'nickname', 'isConnected']
+        });
 
-            if (!user) {
-              throw new NotFoundException(`User '${nickname}' not found`);
-            }
-
-            return user;
-          },
-        ),
-      this.CACHE_TTL,
-    );
+        if (!user) {
+          throw new NotFoundException(`User '${nickname}' not found`);
+        }
+        return user
+      })
   }
 
   /**
@@ -177,63 +158,50 @@ export class UsersService {
    * @param query
    */
   async findAll(query: FindAllDto): Promise<FindAllUsersResponseDto> {
-    const rate = await this.rateLimiter.isAllowed(
-      `user-list:${query.search || 'all'}`,
-      { maxRequests: 20, windowMs: 60_000 },
-    );
-
-    if (!rate.allowed) {
-      throw new HttpException(
-        'Rate limit exceeded',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
     const page = Math.max(1, query.page ?? 1);
     const limit = Math.min(100, query.limit ?? 20);
 
-    const cacheKey = `${this.USERS_LIST_PREFIX}p${page}:l${limit}:s${
-      query.search ?? 'none'
-    }`;
+    let cacheKey = `${CACHED_USER_KEY.USER_LIST}:p${page}:l${limit}`;
+    if (query && query.search) {
+      cacheKey = cacheKey.concat(`:s${
+        query.search
+      }`);
+    }
+    const users: any = await this.cache.get(cacheKey)
+    if (users) return users
+    return await this.executeProtected(
+      BulkheadNameType.UserRead,
+      'user-find-all',
+      async () => {
+        const skip = (page - 1) * limit;
 
-    return this.cache.getOrSet(
-      cacheKey,
-      () =>
-        this.executeProtected(
-          BulkheadNameType.ChatRead,
-          'user-find-all',
-          async () => {
-            const skip = (page - 1) * limit;
+        const qb = this.userRepository.createQueryBuilder('u');
 
-            const qb = this.userRepository.createQueryBuilder('u');
+        if (query.search) {
+          qb.where('LOWER(u.nickname) LIKE :search', {
+            search: `%${query.search.toLowerCase()}%`,
+          });
+        }
 
-            if (query.search) {
-              qb.where('LOWER(u.nickname) LIKE :search', {
-                search: `%${query.search.toLowerCase()}%`,
-              });
-            }
+        qb.orderBy('u.createdAt', 'DESC').skip(skip).take(limit);
 
-            qb.orderBy('u.createdAt', 'DESC').skip(skip).take(limit);
-
-            const [data, total] = await qb.getManyAndCount();
-
-            return {
-              data,
-              meta: {
-                total,
-                page,
-                limit,
-                totalPages: Math.ceil(total / limit),
-              },
-            };
+        const [data, total] = await qb.getManyAndCount();
+        await this.cache.set(cacheKey, data, this.CACHE_TTL)
+        return {
+          data,
+          meta: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
           },
-          async () => ({
-            data: [],
-            meta: { total: 0, page, limit, totalPages: 0 },
-          }),
-        ),
-      this.CACHE_TTL,
-    );
+        };
+      },
+      async () => ({
+        data: [],
+        meta: { total: 0, page, limit, totalPages: 0 },
+      }),
+    )
   }
 
   /**
@@ -242,7 +210,7 @@ export class UsersService {
    */
   async deleteUser(nickname: string): Promise<void> {
     return this.executeProtected(
-      BulkheadNameType.ChatWrite,
+      BulkheadNameType.UserDelete,
       'user-delete',
       async () => {
         const user = await this.userRepository.findOne({
@@ -256,19 +224,10 @@ export class UsersService {
         await this.userRepository.delete(user.id);
 
         await Promise.all([
-          this.cache.delete(`${this.USER_CACHE_PREFIX}${nickname}`),
-          this.cache.deletePattern(`${this.USERS_LIST_PREFIX}*`),
+          this.cache.delete(`${CACHED_USER_KEY.USER_CREATED}:${nickname}`),
+          this.cache.deletePattern(`${CACHED_USER_KEY.USER_LIST}*`),
         ]);
       },
-    );
-  }
-
-
-  private isBypassError(error: any): boolean {
-    return (
-      error instanceof NotFoundException ||
-      error instanceof ConflictException ||
-      (error instanceof HttpException && error.getStatus() < 500)
     );
   }
 
@@ -282,30 +241,25 @@ export class UsersService {
       {
         name: bulkheadName,
         maxConcurrency:
-          bulkheadName === BulkheadNameType.ChatWrite ? 50 : 100,
+          bulkheadName === BulkheadNameType.UserRead ? 50 : 100,
         ttlMs: 10_000,
       },
       async () => {
         try {
           return await this.circuitBreaker.execute(
-            cbName,
-            task,
-            async (err) => {
-              if (this.isBypassError(err)) {
-                throw err;
-              }
-
-              if (fallback) return fallback();
-
-              throw new ServiceUnavailableException(
-                'Service temporarily unavailable',
-              );
+            {
+              name: cbName,
+              failureThreshold: 5,
+              openDurationMs: 30_000,
+              halfOpenMaxAttempts: 1,
             },
+            task,
           );
         } catch (err) {
-          if (this.isBypassError(err)) {
-            throw err;
+          if (fallback) {
+            return fallback();
           }
+
           throw err;
         }
       },

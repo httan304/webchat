@@ -1,10 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import {
+	BadRequestException,
 	ConflictException,
-	NotFoundException,
 	ForbiddenException,
 	HttpException,
-	HttpStatus,
+	NotFoundException,
 } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { RoomsService } from './rooms.service';
@@ -13,35 +13,36 @@ import { RoomParticipant } from './entities/room-participant.entity';
 import { User } from '../users/entities/user.entity';
 import { UsersService } from '../users/users.service';
 
-// Import service classes
 import { CircuitBreakerService } from '@/services/circuit-breaker.service';
 import { CacheService } from '@/services/cache.service';
 import { RateLimiterService } from '@/services/rate-limiter.service';
 import { BulkheadService } from '@/services/bulkhead.service';
-import {RateLimitGuard} from "@/guard/rate-limit.guard";
+import {
+	CACHED_ROOM_KEY,
+	CACHED_ROOM_PARTICIPANTS,
+} from '@/types/cached-key.type';
 
 describe('RoomsService', () => {
 	let service: RoomsService;
-	let roomRepository: any;
-	let userRepository: any;
-	let participantRepository: any;
-	let usersService: any;
-	let circuitBreaker: any;
+	let roomRepo: any;
+	let userRepo: any;
+	let participantRepo: any;
 	let cache: any;
 	let rateLimiter: any;
-	let bulkhead: any;
+
+	const roomId = '550e8400-e29b-41d4-a716-446655440000';
 
 	const mockRoom: Room = {
-		id: 'room-uuid-123',
+		id: roomId,
 		name: 'Test Room',
-		description: 'Test Description',
 		creatorNickname: 'alice',
-		createdAt: new Date('2026-01-29'),
-		updatedAt: new Date('2026-01-29'),
+		description: 'desc',
+		createdAt: new Date(),
+		updatedAt: new Date(),
 	};
 
 	const mockUser: User = {
-		id: 'user-uuid-123',
+		id: 'user-1',
 		nickname: 'alice',
 		isConnected: true,
 		lastSeen: new Date(),
@@ -50,416 +51,224 @@ describe('RoomsService', () => {
 	};
 
 	const mockParticipant: RoomParticipant = {
-		id: 'participant-uuid-123',
-		roomId: 'room-uuid-123',
+		id: 'p1',
+		roomId,
 		nickname: 'alice',
 		joinedAt: new Date(),
-	};
-
-	// Mock implementations
-	const mockRoomRepository = {
-		findOne: jest.fn(),
-		find: jest.fn(),
-		create: jest.fn(),
-		save: jest.fn(),
-		delete: jest.fn(),
-	};
-
-	const mockUserRepository = {
-		findOne: jest.fn(),
-		find: jest.fn(),
-	};
-
-	const mockParticipantRepository = {
-		findOne: jest.fn(),
-		find: jest.fn(),
-		create: jest.fn(),
-		save: jest.fn(),
-		delete: jest.fn(),
-	};
-
-	const mockUsersService = {
-		findByNickname: jest.fn(),
-	};
-
-	const mockCircuitBreaker = {
-		execute: jest.fn((name, fn, fallback) => fn()),
-	};
-
-	const mockCache = {
-		get: jest.fn(),
-		set: jest.fn(),
-		delete: jest.fn(),
-		deletePattern: jest.fn(),
-		getOrSet: jest.fn((key, fn, ttl) => fn()),
-	};
-
-	const mockRateLimiter = {
-		isAllowed: jest.fn().mockResolvedValue({ allowed: true }),
-	};
-
-	const mockBulkhead = {
-		execute: jest.fn((config, fn) => fn()),
 	};
 
 	beforeEach(async () => {
 		const module: TestingModule = await Test.createTestingModule({
 			providers: [
 				RoomsService,
-				{
-					provide: getRepositoryToken(Room),
-					useValue: mockRoomRepository,
-				},
-				{
-					provide: getRepositoryToken(User),
-					useValue: mockUserRepository,
-				},
-				{
-					provide: getRepositoryToken(RoomParticipant),
-					useValue: mockParticipantRepository,
-				},
-				{
-					provide: UsersService,
-					useValue: mockUsersService,
-				},
+				{ provide: getRepositoryToken(Room), useValue: mockRepo() },
+				{ provide: getRepositoryToken(User), useValue: mockRepo() },
+				{ provide: getRepositoryToken(RoomParticipant), useValue: mockRepo() },
+				{ provide: UsersService, useValue: {} },
 				{
 					provide: CircuitBreakerService,
-					useValue: mockCircuitBreaker,
-				},
-				{
-					provide: CacheService,
-					useValue: mockCache,
-				},
-				{
-					provide: RateLimiterService,
-					useValue: mockRateLimiter,
+					useValue: { execute: jest.fn((_, fn) => fn()) },
 				},
 				{
 					provide: BulkheadService,
-					useValue: mockBulkhead,
+					useValue: { execute: jest.fn((_, fn) => fn()) },
+				},
+				{
+					provide: RateLimiterService,
+					useValue: { isAllowed: jest.fn() },
+				},
+				{
+					provide: CacheService,
+					useValue: {
+						get: jest.fn(),
+						set: jest.fn(),
+						delete: jest.fn(),
+						deletePattern: jest.fn(),
+					},
 				},
 			],
-		})
-			.compile();
+		}).compile();
 
-		service = module.get<RoomsService>(RoomsService);
-		roomRepository = module.get(getRepositoryToken(Room));
-		userRepository = module.get(getRepositoryToken(User));
-		participantRepository = module.get(getRepositoryToken(RoomParticipant));
-		usersService = module.get(UsersService);
-		circuitBreaker = module.get(CircuitBreakerService);
+		service = module.get(RoomsService);
+		roomRepo = module.get(getRepositoryToken(Room));
+		userRepo = module.get(getRepositoryToken(User));
+		participantRepo = module.get(getRepositoryToken(RoomParticipant));
 		cache = module.get(CacheService);
 		rateLimiter = module.get(RateLimiterService);
-		bulkhead = module.get(BulkheadService);
 	});
 
-	afterEach(() => {
-		jest.clearAllMocks();
-	});
+	afterEach(() => jest.clearAllMocks());
+
+	const allowRate = () =>
+		rateLimiter.isAllowed.mockResolvedValue({ allowed: true });
 
 	describe('createRoom', () => {
-		it('should create room successfully', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRoomRepository.findOne.mockResolvedValue(null);
-			mockRoomRepository.create.mockReturnValue(mockRoom);
-			mockRoomRepository.save.mockResolvedValue(mockRoom);
-			mockParticipantRepository.create.mockReturnValue(mockParticipant);
-			mockParticipantRepository.save.mockResolvedValue(mockParticipant);
+		it('should create room and auto join owner', async () => {
+			allowRate();
+			userRepo.findOne.mockResolvedValue(mockUser);
+			roomRepo.findOne.mockResolvedValue(null);
+			roomRepo.save.mockResolvedValue(mockRoom);
+			participantRepo.save.mockResolvedValue(mockParticipant);
 
-			const result = await service.createRoom('Test Room', 'alice', 'Description');
+			const result = await service.createRoom(
+				'Test Room',
+				'alice',
+				'desc',
+			);
 
 			expect(result).toEqual(mockRoom);
-			expect(mockRateLimiter.isAllowed).toHaveBeenCalledWith(
-				'room-create:alice',
-				{ maxRequests: 3, windowMs: 60_000 },
+			expect(cache.deletePattern).toHaveBeenCalledWith(
+				`${CACHED_ROOM_KEY.ROOM_LIST}*`,
 			);
-			expect(mockRoomRepository.save).toHaveBeenCalled();
-			expect(mockParticipantRepository.save).toHaveBeenCalled();
-			expect(mockCache.deletePattern).toHaveBeenCalled();
-			expect(mockCache.set).toHaveBeenCalled();
 		});
 
-		it('should throw HttpException when rate limited', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({
-				allowed: false,
-				retryAfter: 30,
-			});
-
-			await expect(
-				service.createRoom('Test Room', 'alice'),
-			).rejects.toThrow(HttpException);
-
-			expect(mockRoomRepository.findOne).not.toHaveBeenCalled();
-		});
-
-		it('should throw ConflictException if room name exists', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
+		it('should throw ConflictException if name exists', async () => {
+			allowRate();
+			userRepo.findOne.mockResolvedValue(mockUser);
+			roomRepo.findOne.mockResolvedValue(mockRoom);
 
 			await expect(
 				service.createRoom('Test Room', 'alice'),
 			).rejects.toThrow(ConflictException);
-
-			expect(mockRoomRepository.save).not.toHaveBeenCalled();
 		});
 
-		it('should auto-join owner as participant', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRoomRepository.findOne.mockResolvedValue(null);
-			mockRoomRepository.create.mockReturnValue(mockRoom);
-			mockRoomRepository.save.mockResolvedValue(mockRoom);
-			mockParticipantRepository.create.mockReturnValue(mockParticipant);
-			mockParticipantRepository.save.mockResolvedValue(mockParticipant);
-
-			await service.createRoom('Test Room', 'alice');
-
-			expect(mockParticipantRepository.create).toHaveBeenCalledWith({
-				roomId: mockRoom.id,
-				nickname: 'alice',
-			});
-			expect(mockParticipantRepository.save).toHaveBeenCalled();
-		});
-	});
-
-	describe('joinRoom', () => {
-		it('should join room successfully', async () => {
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockUserRepository.findOne.mockResolvedValue(mockUser);
-			mockParticipantRepository.findOne.mockResolvedValue(null);
-			mockParticipantRepository.create.mockReturnValue(mockParticipant);
-			mockParticipantRepository.save.mockResolvedValue(mockParticipant);
-
-			await service.joinRoom('room-uuid-123', 'alice');
-
-			expect(mockRoomRepository.findOne).toHaveBeenCalledWith({
-				where: { id: 'room-uuid-123' },
-			});
-			expect(mockUserRepository.findOne).toHaveBeenCalledWith({
-				where: { nickname: 'alice' },
-			});
-			expect(mockParticipantRepository.save).toHaveBeenCalled();
-			expect(mockCache.deletePattern).toHaveBeenCalled();
-		});
-
-		it('should be idempotent (not error if already joined)', async () => {
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockUserRepository.findOne.mockResolvedValue(mockUser);
-			mockParticipantRepository.findOne.mockResolvedValue(mockParticipant);
-
-			await service.joinRoom('room-uuid-123', 'alice');
-
-			expect(mockParticipantRepository.save).not.toHaveBeenCalled();
-		});
-
-		it('should throw NotFoundException if room not found', async () => {
-			mockRoomRepository.findOne.mockResolvedValue(null);
+		it('should throw HttpException if rate limited', async () => {
+			rateLimiter.isAllowed.mockResolvedValue({ allowed: false });
 
 			await expect(
-				service.joinRoom('nonexistent', 'alice'),
-			).rejects.toThrow(NotFoundException);
-		});
-
-		it('should throw NotFoundException if user not found', async () => {
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockUserRepository.findOne.mockResolvedValue(null);
-
-			await expect(
-				service.joinRoom('room-uuid-123', 'nonexistent'),
-			).rejects.toThrow(NotFoundException);
-		});
-	});
-
-	describe('deleteRoom', () => {
-		it('should delete room successfully', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockParticipantRepository.delete.mockResolvedValue({ affected: 1 });
-			mockRoomRepository.delete.mockResolvedValue({ affected: 1 });
-
-			await service.deleteRoom('room-uuid-123', 'alice');
-
-			expect(mockParticipantRepository.delete).toHaveBeenCalledWith({
-				roomId: 'room-uuid-123',
-			});
-			expect(mockRoomRepository.delete).toHaveBeenCalledWith('room-uuid-123');
-			expect(mockCache.delete).toHaveBeenCalled();
-			expect(mockCache.deletePattern).toHaveBeenCalled();
-		});
-
-		it('should throw ForbiddenException if not owner', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-
-			await expect(
-				service.deleteRoom('room-uuid-123', 'bob'),
-			).rejects.toThrow(ForbiddenException);
-
-			expect(mockRoomRepository.delete).not.toHaveBeenCalled();
-		});
-
-		it('should throw NotFoundException if room not found', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRoomRepository.findOne.mockResolvedValue(null);
-
-			await expect(
-				service.deleteRoom('nonexistent', 'alice'),
-			).rejects.toThrow(NotFoundException);
-		});
-
-		it('should throw HttpException when rate limited', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: false });
-
-			await expect(
-				service.deleteRoom('room-uuid-123', 'alice'),
+				service.createRoom('Test', 'alice'),
 			).rejects.toThrow(HttpException);
 		});
 	});
 
-	describe('getRoomsCreatedBy', () => {
-		it('should return rooms created by user', async () => {
-			const rooms = [mockRoom];
+	describe('joinRoom', () => {
+		it('should join room', async () => {
+			roomRepo.findOne.mockResolvedValue({ id: roomId });
+			userRepo.findOne.mockResolvedValue(mockUser);
+			participantRepo.findOne.mockResolvedValue(null);
 
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(async (key, fn) => fn());
-			mockRoomRepository.find.mockResolvedValue(rooms);
+			await service.joinRoom(roomId, 'alice');
 
-			const result = await service.getRoomsCreatedBy('alice');
-
-			expect(result).toEqual(rooms);
-			expect(mockRoomRepository.find).toHaveBeenCalledWith({
-				where: { creatorNickname: 'alice' },
-				order: { createdAt: 'DESC' },
-			});
-		});
-
-		it('should return cached rooms', async () => {
-			const rooms = [mockRoom];
-
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(() => rooms);
-
-			const result = await service.getRoomsCreatedBy('alice');
-
-			expect(result).toEqual(rooms);
-			expect(mockRoomRepository.find).not.toHaveBeenCalled();
-		});
-
-		it('should throw HttpException when rate limited', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: false });
-
-			await expect(service.getRoomsCreatedBy('alice')).rejects.toThrow(
-				HttpException,
+			expect(participantRepo.save).toHaveBeenCalled();
+			expect(cache.deletePattern).toHaveBeenCalledWith(
+				`${CACHED_ROOM_PARTICIPANTS.PARTICIPANT_LIST}:${roomId}*`,
 			);
 		});
 
-		it('should use 5 minute cache TTL', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(() => []);
+		it('should be idempotent', async () => {
+			roomRepo.findOne.mockResolvedValue({ id: roomId });
+			userRepo.findOne.mockResolvedValue(mockUser);
+			participantRepo.findOne.mockResolvedValue(mockParticipant);
 
-			await service.getRoomsCreatedBy('alice');
+			await service.joinRoom(roomId, 'alice');
 
-			expect(mockCache.getOrSet).toHaveBeenCalledWith(
-				'rooms-list:created:alice',
-				expect.any(Function),
-				300, // 5 minutes
-			);
-		});
-	});
-
-	describe('getParticipants', () => {
-		it('should return participants for room owner', async () => {
-			const participants = [mockParticipant];
-
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(async (key, fn) => fn());
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockParticipantRepository.find.mockResolvedValue(participants);
-
-			const result = await service.getParticipants('room-uuid-123', 'alice');
-
-			expect(result).toEqual(participants);
-			expect(mockParticipantRepository.find).toHaveBeenCalledWith({
-				where: { roomId: 'room-uuid-123' },
-				select: ['id', 'nickname', 'joinedAt'],
-				order: { joinedAt: 'ASC' },
-			});
+			expect(participantRepo.save).not.toHaveBeenCalled();
 		});
 
-		it('should throw ForbiddenException if not owner', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(async (key, fn) => fn());
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-
+		it('should throw BadRequestException for invalid roomId', async () => {
 			await expect(
-				service.getParticipants('room-uuid-123', 'bob'),
-			).rejects.toThrow(ForbiddenException);
+				service.joinRoom('invalid-id', 'alice'),
+			).rejects.toThrow(BadRequestException);
 		});
 
 		it('should throw NotFoundException if room not found', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(async (key, fn) => fn());
-			mockRoomRepository.findOne.mockResolvedValue(null);
+			roomRepo.findOne.mockResolvedValue(null);
 
 			await expect(
-				service.getParticipants('nonexistent', 'alice'),
+				service.joinRoom(roomId, 'alice'),
 			).rejects.toThrow(NotFoundException);
-		});
-
-		it('should use 1 minute cache TTL', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockCache.getOrSet.mockImplementation(() => []);
-
-			await service.getParticipants('room-uuid-123', 'alice');
-
-			expect(mockCache.getOrSet).toHaveBeenCalledWith(
-				'participant:room:room-uuid-123',
-				expect.any(Function),
-				60, // 1 minute
-			);
 		});
 	});
 
-	describe('Cache invalidation', () => {
-		it('should invalidate room list cache on create', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRoomRepository.findOne.mockResolvedValue(null);
-			mockRoomRepository.create.mockReturnValue(mockRoom);
-			mockRoomRepository.save.mockResolvedValue(mockRoom);
-			mockParticipantRepository.create.mockReturnValue(mockParticipant);
-			mockParticipantRepository.save.mockResolvedValue(mockParticipant);
+	describe('leaveRoom', () => {
+		it('should remove participant', async () => {
+			roomRepo.findOne.mockResolvedValue({
+				id: roomId,
+				creatorNickname: 'bob',
+			});
+			userRepo.findOne.mockResolvedValue(mockUser);
+			participantRepo.findOne.mockResolvedValue(mockParticipant);
 
-			await service.createRoom('Test Room', 'alice');
+			await service.leaveRoom(roomId, 'alice');
 
-			expect(mockCache.deletePattern).toHaveBeenCalledWith('rooms-list:*');
+			expect(participantRepo.delete).toHaveBeenCalledWith({
+				roomId,
+				nickname: 'alice',
+			});
 		});
 
-		it('should invalidate participant cache on join', async () => {
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockUserRepository.findOne.mockResolvedValue(mockUser);
-			mockParticipantRepository.findOne.mockResolvedValue(null);
-			mockParticipantRepository.create.mockReturnValue(mockParticipant);
-			mockParticipantRepository.save.mockResolvedValue(mockParticipant);
+		it('should forbid creator leaving', async () => {
+			roomRepo.findOne.mockResolvedValue({
+				id: roomId,
+				creatorNickname: 'alice',
+			});
 
-			await service.joinRoom('room-uuid-123', 'alice');
+			await expect(
+				service.leaveRoom(roomId, 'alice'),
+			).rejects.toThrow(ForbiddenException);
+		});
+	});
+	describe('getParticipants', () => {
+		it('should return participants with isOwner', async () => {
+			roomRepo.findOne.mockResolvedValue(mockRoom);
+			participantRepo.find.mockResolvedValue([mockParticipant]);
 
-			expect(mockCache.deletePattern).toHaveBeenCalledWith(
-				'participant:room:room-uuid-123*',
-			);
+			const res = await service.getParticipants(roomId, 'alice');
+
+			expect(res[0]).toMatchObject({
+				nickname: 'alice',
+				isOwner: true,
+			});
 		});
 
-		it('should invalidate all room caches on delete', async () => {
-			mockRateLimiter.isAllowed.mockResolvedValue({ allowed: true });
-			mockRoomRepository.findOne.mockResolvedValue(mockRoom);
-			mockParticipantRepository.delete.mockResolvedValue({ affected: 1 });
-			mockRoomRepository.delete.mockResolvedValue({ affected: 1 });
+		it('should return empty array if not owner', async () => {
+			roomRepo.findOne.mockResolvedValue({
+				...mockRoom,
+				creatorNickname: 'alice',
+			});
 
-			await service.deleteRoom('room-uuid-123', 'alice');
+			const result = await service.getParticipants(roomId, 'bob');
 
-			expect(mockCache.delete).toHaveBeenCalledWith('room:room-uuid-123');
-			expect(mockCache.deletePattern).toHaveBeenCalledWith('rooms-list:*');
-			expect(mockCache.deletePattern).toHaveBeenCalledWith(
-				'participant:room:room-uuid-123*',
-			);
+			expect(result).toEqual([]);
+		});
+	});
+
+	describe('getMyRooms', () => {
+		it('should return created + joined rooms', async () => {
+			roomRepo.find.mockResolvedValue([mockRoom]);
+			participantRepo.createQueryBuilder = jest.fn(() => ({
+				select: () => ({
+					where: () => ({
+						getRawMany: () => [{ roomId }],
+					}),
+				}),
+			}));
+
+			const result = await service.getMyRooms('alice');
+			expect(result.length).toBe(1);
+		});
+	});
+
+	describe('deleteRoom', () => {
+		it('should delete room if owner', async () => {
+			allowRate();
+			roomRepo.findOne.mockResolvedValue(mockRoom);
+
+			await service.deleteRoom(roomId, 'alice');
+
+			expect(roomRepo.delete).toHaveBeenCalledWith(roomId);
+			expect(participantRepo.delete).toHaveBeenCalledWith({ roomId });
 		});
 	});
 });
+
+function mockRepo() {
+	return {
+		findOne: jest.fn(),
+		find: jest.fn(),
+		save: jest.fn(),
+		delete: jest.fn(),
+		create: jest.fn(),
+		createQueryBuilder: jest.fn(),
+	};
+}

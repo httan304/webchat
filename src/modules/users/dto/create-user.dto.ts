@@ -10,7 +10,7 @@ import {
 
 export class CreateUserDto {
   @ApiProperty({
-    example: 'alice_01',
+    example: 'alice_123',
     description: 'Unique nickname of the user',
     minLength: 3,
     maxLength: 50,

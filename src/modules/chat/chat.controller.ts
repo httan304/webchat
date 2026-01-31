@@ -25,10 +25,10 @@ import {ChatService} from "@/modules/chat/chat.service";
 export class ChatController {
   constructor(private readonly chatService: ChatService) {}
 
-  @Get('rooms/:roomId/messages')
+  @Get(':roomId/messages')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get messages with pagination' })
-  @ApiParam({ name: 'roomId', example: 'room-uuid-123' })
+  @ApiParam({ name: 'roomId', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
   @ApiQuery({ name: 'page', required: false, example: 1 })
   @ApiQuery({ name: 'limit', required: false, example: 50 })
   @ApiOkResponse({
@@ -53,10 +53,10 @@ export class ChatController {
     return this.chatService.getMessages(roomId, page, limit);
   }
 
-  @Get('rooms/:roomId/messages/chronological')
+  @Get(':roomId/messages/chronological')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get messages (oldest first)' })
-  @ApiParam({ name: 'roomId' })
+  @ApiParam({ name: 'roomId', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
   @ApiQuery({ name: 'page', example: 1 })
   @ApiQuery({ name: 'limit', example: 50 })
   async getMessagesChronological(
@@ -67,10 +67,10 @@ export class ChatController {
     return this.chatService.getMessagesChronological(roomId, page, limit);
   }
 
-  @Get('rooms/:roomId/messages/since')
+  @Get(':roomId/messages/since')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get messages since timestamp' })
-  @ApiParam({ name: 'roomId' })
+  @ApiParam({ name: 'roomId', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
   @ApiQuery({
     name: 'timestamp',
     example: '2026-01-29T10:00:00Z',
@@ -90,10 +90,10 @@ export class ChatController {
     return this.chatService.getMessagesSince(roomId, since, limit);
   }
 
-  @Get('rooms/:roomId/messages/latest')
+  @Get(':roomId/messages/latest')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Get latest messages (preview)' })
-  @ApiParam({ name: 'roomId' })
+  @ApiParam({ name: 'roomId', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
   @ApiQuery({ name: 'limit', example: 20 })
   async getLatestMessages(
     @Param('roomId') roomId: string,

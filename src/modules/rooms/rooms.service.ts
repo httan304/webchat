@@ -1,35 +1,33 @@
 import {
-  Injectable,
-  NotFoundException,
   BadRequestException,
-  Logger,
-  ForbiddenException,
   ConflictException,
+  ForbiddenException,
   HttpException,
-  HttpStatus, ServiceUnavailableException,
+  HttpStatus,
+  Injectable,
+  Logger,
+  NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Room } from './entities/room.entity';
-import { RoomParticipant } from './entities/room-participant.entity';
-import { User } from '../users/entities/user.entity';
-import { UsersService } from '../users/users.service';
+import {InjectRepository} from '@nestjs/typeorm';
+import {In, Repository} from 'typeorm';
+import {Room} from './entities/room.entity';
+import {RoomParticipant} from './entities/room-participant.entity';
+import {User} from '../users/entities/user.entity';
+import {UsersService} from '../users/users.service';
 
-import { CircuitBreakerService } from '@/services/circuit-breaker.service';
-import { CacheService } from '@/services/cache.service';
-import { RateLimiterService } from '@/services/rate-limiter.service';
-import { BulkheadService } from '@/services/bulkhead.service';
-import { BulkheadNameType } from '@/types/bulkhead-name-type';
+import {CircuitBreakerService} from '@/services/circuit-breaker.service';
+import {CacheService} from '@/services/cache.service';
+import {RateLimiterService} from '@/services/rate-limiter.service';
+import {BulkheadService} from '@/services/bulkhead.service';
+import {BulkheadNameType} from '@/types/bulkhead-name-type';
 import {isUUID} from "class-validator";
+import {CACHED_RATE_LIMIT_ROOM_KEY, CACHED_ROOM_KEY, CACHED_ROOM_PARTICIPANTS} from "@/types/cached-key.type";
 
 @Injectable()
 export class RoomsService {
   private readonly logger = new Logger(RoomsService.name);
 
   private readonly CACHE_TTL = 300; // 5 minutes
-  private readonly ROOM_CACHE_PREFIX = 'room:';
-  private readonly ROOMS_LIST_PREFIX = 'rooms-list:';
-  private readonly PARTICIPANT_CACHE_PREFIX = 'participant:';
 
   constructor(
     @InjectRepository(Room)
@@ -59,7 +57,7 @@ export class RoomsService {
   ): Promise<Room> {
     // Rate limit giữ nguyên
     const rate = await this.rateLimiter.isAllowed(
-      `room-create:${ownerNickname}`,
+      `${CACHED_RATE_LIMIT_ROOM_KEY.ROOM_RATE_LIMIT}:${ownerNickname}`,
       { maxRequests: 3, windowMs: 60_000 },
     );
 
@@ -70,11 +68,23 @@ export class RoomsService {
       );
     }
 
-    return this.executeProtected(
+    const room = await this.executeProtected(
       BulkheadNameType.ChatWrite,
       'room-create',
       () => this.performCreateRoom(name, ownerNickname, description),
     );
+
+    // Cache room
+    await this.cache.set(
+      `${CACHED_ROOM_KEY.ROOM_CREATED}:${room.id}`,
+      room,
+      this.CACHE_TTL,
+    );
+
+    // Cache invalidate
+    await this.cache.deletePattern(`${CACHED_ROOM_KEY.ROOM_LIST}*`);
+    await this.cache.deletePattern(`${CACHED_ROOM_PARTICIPANTS.PARTICIPANT_LIST}:${room.id}:*`);
+    return room
   }
 
 
@@ -120,17 +130,6 @@ export class RoomsService {
         }),
       );
 
-      // Cache invalidate
-      await this.cache.deletePattern(`${this.ROOMS_LIST_PREFIX}*`);
-      await this.cache.deletePattern(`${this.PARTICIPANT_CACHE_PREFIX}${ownerNickname}:*`);
-
-      // Cache room
-      await this.cache.set(
-        `${this.ROOM_CACHE_PREFIX}${room.id}`,
-        room,
-        this.CACHE_TTL,
-      );
-
       return room;
     } catch (error) {
       if (
@@ -159,12 +158,22 @@ export class RoomsService {
       throw new BadRequestException('Invalid room id');
     }
     return this.executeProtected(
-      BulkheadNameType.ChatWrite,
+      BulkheadNameType.RoomJoin,
       'room-join',
       () => this.performJoinRoom(roomId, nickname),
     );
   }
 
+  async leaveRoom(roomId: string, nickname: string): Promise<void> {
+    if (!isUUID(roomId)) {
+      throw new BadRequestException('Invalid room id');
+    }
+    return this.executeProtected(
+      BulkheadNameType.RoomLeave,
+      'room-leave',
+      () => this.performLeaveRoom(roomId, nickname),
+    );
+  }
 
   /**
    * Perform join room operation
@@ -173,13 +182,18 @@ export class RoomsService {
   private async performJoinRoom(roomId: string, nickname: string): Promise<void> {
     try {
       // 1. Check room exists
-      const room = await this.roomRepository.findOne({ where: { id: roomId } });
+      const room = await this.roomRepository.findOne({ where: { id: roomId }, select: ['id'] });
       if (!room) {
         throw new NotFoundException('Room not found');
       }
 
+      if (room.creatorNickname === nickname) {
+        // Room owner is always a participant
+        return;
+      }
+
       // 2. Check user exists
-      const user = await this.userRepository.findOne({ where: { nickname } });
+      const user = await this.userRepository.findOne({ where: { nickname }, select: ['id'] });
       if (!user) {
         throw new NotFoundException('User not found');
       }
@@ -187,6 +201,7 @@ export class RoomsService {
       // 3. Check if already joined
       const joined = await this.participantRepository.findOne({
         where: { roomId, nickname },
+        select: ['id']
       });
 
       if (joined) {
@@ -198,11 +213,9 @@ export class RoomsService {
       await this.participantRepository.save(
         this.participantRepository.create({ roomId, nickname }),
       );
-
-      // 5. Invalidate caches
-      await this.cache.deletePattern(`${this.PARTICIPANT_CACHE_PREFIX}room:${roomId}*`);
-      await this.cache.deletePattern(`${this.PARTICIPANT_CACHE_PREFIX}${roomId}:${nickname}`);
-      await this.cache.delete(`${this.ROOM_CACHE_PREFIX}${roomId}`);
+      // // 5. Invalidate caches
+      await this.cache.deletePattern(`${CACHED_ROOM_PARTICIPANTS.PARTICIPANT_LIST}:${roomId}*`);
+      await this.cache.delete(`${CACHED_ROOM_KEY.ROOM_LIST}:${roomId}`);
 
       this.logger.log(`User ${nickname} joined room ${roomId}`);
     } catch (error) {
@@ -225,6 +238,30 @@ export class RoomsService {
     }
   }
 
+  async performLeaveRoom(roomId: string, nickname: string): Promise<void> {
+    const room = await this.roomRepository.findOne({where: {id: roomId}, select: ['id', 'creatorNickname']});
+    if(!room) {
+      throw new NotFoundException('Room not found');
+    }
+    if (room.creatorNickname === nickname) {
+      throw new ForbiddenException('Room creator cannot leave the room');
+    }
+    const user = await this.userRepository.findOne({ where: { nickname }, select: ['id'] });
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const participant = await this.participantRepository.findOne({where: {roomId, nickname}, select: ['id']});
+    if (!participant) {
+      throw new NotFoundException(`Participant ${nickname} not found in ${roomId}`);
+    }
+
+    await this.participantRepository.delete({roomId, nickname});
+
+    // Invalidate caches
+    await this.cache.deletePattern(`${CACHED_ROOM_PARTICIPANTS.PARTICIPANT_LIST}:${roomId}*`);
+    await this.cache.deletePattern(`${CACHED_ROOM_KEY.ROOM_LIST}:${roomId}*`);
+  }
+
   /**
    * Delete a room
    * ✅ Rate Limiting
@@ -237,12 +274,11 @@ export class RoomsService {
       throw new BadRequestException('Invalid room id');
     }
     return this.executeProtected(
-      BulkheadNameType.ChatWrite,
+      BulkheadNameType.RoomDelete,
       'room-delete',
       () => this.performDeleteRoom(roomId, requester),
     );
   }
-
 
   /**
    * Perform delete room operation
@@ -253,6 +289,7 @@ export class RoomsService {
       // 1. Get room with ownership check
       const room = await this.roomRepository.findOne({
         where: { id: roomId },
+        select: ['id', 'creatorNickname']
       });
 
       if (!room) {
@@ -271,10 +308,9 @@ export class RoomsService {
       await this.roomRepository.delete(roomId);
 
       // 5. Invalidate caches
-      await this.cache.delete(`${this.ROOM_CACHE_PREFIX}${roomId}`);
-      await this.cache.deletePattern(`${this.ROOMS_LIST_PREFIX}*`);
-      await this.cache.deletePattern(`${this.PARTICIPANT_CACHE_PREFIX}room:${roomId}*`);
-      await this.cache.deletePattern(`${this.PARTICIPANT_CACHE_PREFIX}*:${roomId}`);
+      await this.cache.delete(`${CACHED_ROOM_KEY.ROOM_CREATED}:${roomId}`);
+      await this.cache.deletePattern(`${CACHED_ROOM_KEY.ROOM_LIST}*`);
+      await this.cache.deletePattern(`${CACHED_ROOM_PARTICIPANTS.PARTICIPANT_LIST}:${roomId}*`);
 
       this.logger.warn(`Room deleted: ${room.name} by ${requesterNickname}`);
     } catch (error) {
@@ -285,83 +321,14 @@ export class RoomsService {
 
       if (
         error instanceof NotFoundException ||
-        error instanceof ForbiddenException
+        error instanceof ForbiddenException ||
+        error instanceof BadRequestException
       ) {
         throw error;
       }
 
       throw new HttpException(
         'Failed to delete room',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
-  }
-
-  /**
-   * Get rooms created by user
-   * ✅ Rate Limiting
-   * ✅ Circuit Breaker
-   * ✅ Bulkhead
-   * ✅ Caching
-   */
-  async getRoomsCreatedBy(nickname: string): Promise<Room[]> {
-    // Rate Limiting
-    const rateLimitKey = `room-list:${nickname}`;
-    const rate = await this.rateLimiter.isAllowed(rateLimitKey, {
-      maxRequests: 20, // 20 requests
-      windowMs: 60_000, // per minute
-    });
-
-    if (!rate.allowed) {
-      throw new HttpException(
-        'Rate limit exceeded',
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
-    // Cache first
-    const cacheKey = `${this.ROOMS_LIST_PREFIX}created:${nickname}`;
-
-    return this.cache.getOrSet(
-      cacheKey,
-      () =>
-        this.bulkhead.execute(
-          {
-            name: BulkheadNameType.ChatRead,
-            maxConcurrency: 100,
-            ttlMs: 10_000,
-          },
-          () =>
-            this.circuitBreaker.execute(
-              'room-list-created',
-              () => this.performGetRoomsCreatedBy(nickname),
-              // ✅ Fallback - return empty array
-              async () => {
-                this.logger.warn(`Circuit breaker fallback for getRoomsCreatedBy`);
-                return [];
-              },
-            ),
-        ),
-      this.CACHE_TTL,
-    );
-  }
-
-  /**
-   * Perform get rooms created by
-   * @private
-   */
-  private async performGetRoomsCreatedBy(nickname: string): Promise<Room[]> {
-    try {
-      return await this.roomRepository.find({
-        where: { creatorNickname: nickname },
-        order: { createdAt: 'DESC' },
-      });
-    } catch (error) {
-      this.logger.error(
-        `Error getting rooms created by ${nickname}: ${error.message}`,
-      );
-      throw new HttpException(
-        'Failed to get rooms',
         HttpStatus.INTERNAL_SERVER_ERROR,
       );
     }
@@ -378,8 +345,11 @@ export class RoomsService {
     if (!isUUID(roomId)) {
       throw new BadRequestException('Invalid room id');
     }
+    const cacheKey = `${CACHED_ROOM_PARTICIPANTS.PARTICIPANT_LIST}:${roomId}`;
+    const participants: any = await this.cache.get(cacheKey)
+    if(participants) return participants
     return this.executeProtected(
-      BulkheadNameType.ChatRead,
+      BulkheadNameType.RoomRead,
       'room-get-participants',
       () => this.performGetParticipants(roomId, requester),
       async () => [],
@@ -414,8 +384,15 @@ export class RoomsService {
         select: ['id', 'nickname', 'joinedAt'],
         order: { joinedAt: 'ASC' },
       });
-
-      return participants;
+      if (!participants || !participants.length) return []
+      return participants.map(p => {
+        return {
+          id: p.id,
+          nickname: p.nickname,
+          isOwner: p.nickname === room.creatorNickname,
+          joinedAt: p.joinedAt,
+        };
+      })
     } catch (error) {
       this.logger.error(
         `Error getting participants for room ${roomId}: ${error.message}`,
@@ -424,7 +401,8 @@ export class RoomsService {
 
       if (
         error instanceof NotFoundException ||
-        error instanceof ForbiddenException
+        error instanceof ForbiddenException ||
+        error instanceof BadRequestException
       ) {
         throw error;
       }
@@ -443,125 +421,31 @@ export class RoomsService {
    * ✅ Bulkhead
    */
   async findOne(roomId: string): Promise<Room | null> {
+    this.logger.debug('findOne roomId:', roomId);
     if (!isUUID(roomId)) {
       throw new BadRequestException('Invalid room id');
     }
-    const cacheKey = `${this.ROOM_CACHE_PREFIX}${roomId}`;
+    const cacheKey = `${CACHED_ROOM_KEY.ROOM_CREATED}:${roomId}`;
+    const room: Room | null = await this.cache.get(cacheKey);
+    if (room) return room
 
-    return this.cache.getOrSet(
-      cacheKey,
-      () =>
-        this.executeProtected(
-          BulkheadNameType.ChatRead,
-          'room-find-one',
-          async () => {
-            const room = await this.roomRepository.findOne({
-              where: { id: roomId },
-              relations: ['participants'],
-            });
+    return await this.executeProtected(
+      BulkheadNameType.RoomRead,
+      'room-find-one',
+      async () => {
+        const room = await this.roomRepository.findOne({
+          where: { id: roomId },
+          // relations: ['participants'],
+        });
 
-            if (!room) {
-              throw new NotFoundException('Room not found');
-            }
-
-            return room;
-          },
-          async () => null, // fallback
-        ),
-      this.CACHE_TTL,
-    );
-  }
-
-  /**
-   * Add participant to a room
-   * ✅ Circuit Breaker
-   * ✅ Bulkhead
-   * ✅ Cache invalidation
-   */
-  async addParticipant(roomId: string, userNickname: string): Promise<void> {
-    if (!isUUID(roomId)) {
-      throw new BadRequestException('Invalid room id');
-    }
-    return this.bulkhead.execute(
-      {
-        name: BulkheadNameType.ChatWrite,
-        maxConcurrency: 50,
-        ttlMs: 15_000,
+        if (!room) {
+          throw new NotFoundException('Room not found');
+        }
+        await this.cache.set(cacheKey, room, this.CACHE_TTL);
+        return room;
       },
-      () =>
-        this.circuitBreaker.execute(
-          'room-add-participant',
-          () => this.performAddParticipant(roomId, userNickname),
-          async (error: Error) => {
-            this.logger.error(`Circuit breaker fallback for addParticipant: ${error.message}`);
-            throw new HttpException(
-              'Room service temporarily unavailable',
-              HttpStatus.SERVICE_UNAVAILABLE,
-            );
-          },
-        ),
-    );
-  }
-
-  /**
-   * Perform add participant
-   * @private
-   */
-  private async performAddParticipant(roomId: string, userNickname: string): Promise<void> {
-    try {
-      // 1. Check room exists
-      const room = await this.roomRepository.findOne({ where: { id: roomId } });
-      if (!room) {
-        throw new NotFoundException('Room not found');
-      }
-
-      // 2. Check user exists
-      const user = await this.usersService.findByNickname(userNickname);
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      // 3. Check if already participant
-      const existing = await this.participantRepository.findOne({
-        where: { roomId, nickname: user.nickname },
-      });
-
-      if (existing) {
-        throw new BadRequestException('User is already a participant');
-      }
-
-      // 4. Add participant
-      const participant = this.participantRepository.create({
-        roomId,
-        nickname: user.nickname,
-      });
-
-      await this.participantRepository.save(participant);
-
-      // 5. Invalidate caches
-      await this.cache.deletePattern(`${this.PARTICIPANT_CACHE_PREFIX}room:${roomId}*`);
-      await this.cache.delete(`${this.ROOM_CACHE_PREFIX}${roomId}`);
-      await this.cache.deletePattern(`${this.PARTICIPANT_CACHE_PREFIX}${user.nickname}:*`);
-
-      this.logger.log(`User ${userNickname} added to room ${roomId}`);
-    } catch (error) {
-      this.logger.error(
-        `Error adding participant to room ${roomId}: ${error.message}`,
-        error.stack,
-      );
-
-      if (
-        error instanceof NotFoundException ||
-        error instanceof BadRequestException
-      ) {
-        throw error;
-      }
-
-      throw new HttpException(
-        'Failed to add participant',
-        HttpStatus.INTERNAL_SERVER_ERROR,
-      );
-    }
+      async () => null, // fallback
+    )
   }
 
   /**
@@ -571,19 +455,12 @@ export class RoomsService {
    * ✅ Caching
    */
   async getMyRooms(nickname: string): Promise<Room[]> {
-    const cacheKey = `${this.ROOMS_LIST_PREFIX}my:${nickname}`;
-
-    return this.cache.getOrSet(
-      cacheKey,
-      () =>
-        this.executeProtected(
-          BulkheadNameType.ChatRead,
-          'room-get-my',
-          () => this.performGetMyRooms(nickname),
-          async () => [],
-        ),
-      this.CACHE_TTL,
-    );
+    return await this.executeProtected(
+      BulkheadNameType.RoomRead,
+      'room-get-my',
+      () => this.performGetMyRooms(nickname),
+      async () => [],
+    )
   }
 
   /**
@@ -596,7 +473,6 @@ export class RoomsService {
       const createdRooms = await this.roomRepository.find({
         where: { creatorNickname: nickname },
       });
-      console.log('createdRooms', createdRooms);
       const joinedRoomIds = await this.participantRepository
         .createQueryBuilder('p')
         .select('DISTINCT p.roomId', 'roomId')
@@ -607,7 +483,7 @@ export class RoomsService {
 
       let joinedRooms: Room[] = [];
       if (joinedIds.length > 0) {
-        joinedRooms = await this.roomRepository.findByIds(joinedIds);
+        joinedRooms = await this.roomRepository.find({where: {id: In(joinedIds)}});
       }
       const roomMap = new Map<string, Room>();
 
@@ -633,17 +509,6 @@ export class RoomsService {
     }
   }
 
-
-  private isBypassError(error: any): boolean {
-    return (
-      error instanceof NotFoundException ||
-      error instanceof ConflictException ||
-      error instanceof BadRequestException ||
-      error instanceof ForbiddenException ||
-      (error instanceof HttpException && error.getStatus() < 500)
-    );
-  }
-
   private async executeProtected<T>(
     bulkheadName: BulkheadNameType,
     cbName: string,
@@ -654,27 +519,28 @@ export class RoomsService {
       {
         name: bulkheadName,
         maxConcurrency:
-          bulkheadName === BulkheadNameType.ChatWrite ? 50 : 100,
+          bulkheadName === BulkheadNameType.ChatRead ? 50 : 100,
         ttlMs: 10_000,
       },
-      async () =>
-        this.circuitBreaker.execute(
-          cbName,
-          task,
-          async (err) => {
-            // Business error
-            if (this.isBypassError(err)) {
-              throw err;
-            }
+      async () => {
+        try {
+          return await this.circuitBreaker.execute(
+            {
+              name: cbName,
+              failureThreshold: 5,
+              openDurationMs: 30_000,
+              halfOpenMaxAttempts: 1,
+            },
+            task,
+          );
+        } catch (err) {
+          if (fallback) {
+            return fallback();
+          }
 
-            // Infra error → fallback / 503
-            if (fallback) return fallback();
-
-            throw new ServiceUnavailableException(
-              'Service temporarily unavailable',
-            );
-          },
-        ),
+          throw err;
+        }
+      },
     );
   }
 

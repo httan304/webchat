@@ -1,12 +1,10 @@
 import {
     Injectable,
     Inject,
-    Logger,
     ServiceUnavailableException,
 } from '@nestjs/common';
 import { Redis } from 'ioredis';
 import { REDIS_CLIENT } from '@/infrastructure/redis/redis.provider';
-
 
 export interface BulkheadConfig {
     name: string;
@@ -16,8 +14,6 @@ export interface BulkheadConfig {
 
 @Injectable()
 export class BulkheadService {
-    private readonly logger = new Logger(BulkheadService.name);
-
     constructor(@Inject(REDIS_CLIENT) private readonly redis: Redis) {}
 
     private key(name: string) {
@@ -33,6 +29,7 @@ export class BulkheadService {
 
         const current = await this.redis.incr(key);
 
+        // ensure TTL
         if (current === 1) {
             await this.redis.pexpire(key, ttl);
         }
@@ -49,18 +46,5 @@ export class BulkheadService {
         } finally {
             await this.redis.decr(key);
         }
-    }
-
-    async getStatus(config: BulkheadConfig) {
-        const value = Number((await this.redis.get(this.key(config.name))) ?? 0);
-
-        return {
-            name: config.name,
-            currentConcurrency: value,
-            maxConcurrency: config.maxConcurrency,
-            utilization: ((value / config.maxConcurrency) * 100).toFixed(2) + '%',
-            status:
-              value >= config.maxConcurrency ? 'SATURATED' : 'HEALTHY',
-        };
     }
 }

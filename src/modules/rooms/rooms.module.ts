@@ -4,7 +4,7 @@ import { RoomsService } from './rooms.service';
 import { RoomsController } from './rooms.controller';
 import { Room } from './entities/room.entity';
 import { RoomParticipant } from './entities/room-participant.entity';
-import { User } from '../users/entities/user.entity'; // ✅ ADD THIS
+import { User } from '../users/entities/user.entity';
 import { UsersModule } from '../users/users.module';
 
 import { CircuitBreakerService } from '@/services/circuit-breaker.service';
@@ -29,6 +29,6 @@ import { BulkheadService } from '@/services/bulkhead.service';
     RateLimiterService,
     BulkheadService,
   ],
-  exports: [RoomsService],
+  exports: [RoomsService, RoomsService],
 })
 export class RoomsModule {}

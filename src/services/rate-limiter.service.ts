@@ -72,7 +72,7 @@ export class RateLimiterService {
             return {
                 allowed: allowed === 1,
                 remaining: Math.floor(tokens),
-                retryAfter:
+                retryAfterMs:
                   allowed === 1
                     ? undefined
                     : Math.ceil(1 / refillRate),
@@ -87,4 +87,5 @@ export class RateLimiterService {
             };
         }
     }
+
 }

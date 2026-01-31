@@ -32,7 +32,8 @@ export class RoomsController {
 	constructor(private readonly roomsService: RoomsService) {}
 
 	/**
-	 * Create a new room
+	 * Create new room
+	 * @param createRoomDto
 	 */
 	@Post()
 	@HttpCode(HttpStatus.CREATED)
@@ -53,11 +54,12 @@ export class RoomsController {
 
 	/**
 	 * Get room by ID
+	 * @param id
 	 */
 	@Get(':id')
 	@HttpCode(HttpStatus.OK)
 	@ApiOperation({ summary: 'Get room by ID' })
-	@ApiParam({ name: 'id', example: 'room-uuid-123' })
+	@ApiParam({ name: 'id', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
 	@ApiResponse({
 		status: HttpStatus.OK,
 		description: 'Room found',
@@ -67,16 +69,19 @@ export class RoomsController {
 		return this.roomsService.findOne(id);
 	}
 
+
 	/**
-	 * List participants with connection status
+	 * Get room participants
+	 * @param roomId
+	 * @param requesterNickname
 	 */
 	@Get(':id/participants')
 	@HttpCode(HttpStatus.OK)
 	@ApiOperation({ summary: 'Get room participants' })
-	@ApiParam({ name: 'id', example: 'room-uuid-123' })
+	@ApiParam({ name: 'id', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
 	@ApiQuery({
 		name: 'requester',
-		required: true,
+		required: false,
 		example: 'alice',
 	})
 	@ApiResponse({
@@ -87,6 +92,7 @@ export class RoomsController {
 				{
 					id: 'user-uuid',
 					nickname: 'alice',
+					isOwner: true,
 					joinedAt: '2026-01-29T10:00:00.000Z',
 				},
 			],
@@ -106,23 +112,25 @@ export class RoomsController {
 	}
 
 	/**
-	 * Join room
+	 * Participant join room
+	 * @param roomId
+	 * @param nickname
 	 */
 	@Post(':id/participants/:nickname')
 	@HttpCode(HttpStatus.CREATED)
 	@ApiOperation({ summary: 'Join a room' })
-	@ApiParam({ name: 'id', example: 'room-uuid-123' })
+	@ApiParam({ name: 'id', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
 	@ApiParam({ name: 'nickname', example: 'alice' })
 	@ApiResponse({
 		status: HttpStatus.CREATED,
 		description: 'User joined room',
 		schema: {
 			example: {
-				message: 'User alice joined room room-uuid-123',
+				message: 'User alice joined room 95196e94-872b-4309-8a6e-8ca30914d360',
 			},
 		},
 	})
-	async addParticipant(
+	async joinRoom(
 		@Param('id') roomId: string,
 		@Param('nickname') nickname: string,
 	): Promise<{ message: string }> {
@@ -131,19 +139,46 @@ export class RoomsController {
 	}
 
 	/**
+	 * Participant leave room
+	 * @param roomId
+	 * @param nickname
+	 */
+	@Delete(':id/participants/:nickname')
+	@HttpCode(HttpStatus.CREATED)
+	@ApiOperation({ summary: 'Leave a room' })
+	@ApiParam({ name: 'id', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
+	@ApiParam({ name: 'nickname', example: 'alice' })
+	@ApiResponse({
+		status: HttpStatus.CREATED,
+		description: 'User left room',
+		schema: {
+			example: {
+				message: 'User alice left room 95196e94-872b-4309-8a6e-8ca30914d360',
+			},
+		},
+	})
+	async leaveRoom(
+		@Param('id') roomId: string,
+		@Param('nickname') nickname: string,
+	): Promise<{ message: string }> {
+		await this.roomsService.leaveRoom(roomId, nickname);
+		return { message: `User ${nickname} left room ${roomId}` };
+	}
+
+	/**
 	 * Delete room (creator only)
 	 */
 	@Delete(':id')
 	@HttpCode(HttpStatus.OK)
 	@ApiOperation({ summary: 'Delete a room (creator only)' })
-	@ApiParam({ name: 'id', example: 'room-uuid-123' })
+	@ApiParam({ name: 'id', example: '95196e94-872b-4309-8a6e-8ca30914d360' })
 	@ApiBody({ type: DeleteRoomDto })
 	@ApiResponse({
 		status: HttpStatus.OK,
 		description: 'Room deleted successfully',
 		schema: {
 			example: {
-				message: 'Room room-uuid-123 deleted successfully',
+				message: 'Room 95196e94-872b-4309-8a6e-8ca30914d360 deleted successfully',
 			},
 		},
 	})

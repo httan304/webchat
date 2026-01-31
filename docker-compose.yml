@@ -3,7 +3,6 @@ version: "3.9"
 services:
   postgres:
     image: postgres:15-alpine
-    platform: linux/amd64
     container_name: chatapp_postgres
     restart: unless-stopped
     environment:
@@ -24,10 +23,10 @@ services:
 
   redis:
     image: redis:7-alpine
-    platform: linux/amd64
     container_name: chatapp_redis
     restart: unless-stopped
     command: redis-server --appendonly yes
+    stop_grace_period: 30s
     volumes:
       - redis_data:/data
     ports:

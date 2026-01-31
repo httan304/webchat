@@ -6,5 +6,5 @@ export interface RateLimitConfig {
 export interface RateLimitResult {
 	allowed: boolean;
 	remaining: number;
-	retryAfter?: number;
+	retryAfterMs?: number;
 }

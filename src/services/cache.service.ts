@@ -1,8 +1,8 @@
-import {Injectable, Logger} from '@nestjs/common';
-import {CACHE_MANAGER} from '@nestjs/cache-manager';
-import {Inject} from '@nestjs/common';
-import {Cache} from 'cache-manager';
-import {Redis} from "ioredis";
+import { Injectable, Logger, Inject } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Cache } from 'cache-manager';
+import { Redis } from 'ioredis';
+import { randomUUID } from 'crypto';
 
 interface CacheStats {
 	hits: number;
@@ -16,6 +16,7 @@ interface CacheStats {
 @Injectable()
 export class CacheService {
 	private readonly logger = new Logger(CacheService.name);
+
 	private stats: CacheStats = {
 		hits: 0,
 		misses: 0,
@@ -25,173 +26,139 @@ export class CacheService {
 		hitRate: '0.00%',
 	};
 
-	constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache, @Inject('REDIS_CLIENT') private readonly redis: Redis,
-	) {
-	}
+	constructor(
+		@Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+		@Inject('REDIS_CLIENT') private readonly redis: Redis,
+	) {}
 
-	/**
-	 * Get value from cache
-	 */
 	async get<T>(key: string): Promise<T | null> {
 		try {
 			const value = await this.cacheManager.get<T>(key);
 
-			if (value) {
-				this.stats.hits += 1;
-				this.stats.total = this.stats.hits + this.stats.misses;
-				this.updateHitRate();
-				this.logger.debug(`âœ… Cache HIT: ${key}`);
+			if (value !== null && value !== undefined) {
+				this.stats.hits++;
+				this.updateStats();
+				this.logger.debug(`Cache HIT: ${key}`);
 				return value;
 			}
 
-			this.stats.misses += 1;
-			this.stats.total = this.stats.hits + this.stats.misses;
-			this.updateHitRate();
-			this.logger.debug(`âŒ Cache MISS: ${key}`);
+			this.stats.misses++;
+			this.updateStats();
+			this.logger.debug(`Cache MISS: ${key}`);
 			return null;
-		} catch (error) {
-			this.logger.error(
-				`Cache get error for key ${key}: ${(error as Error).message}`,
-			);
+		} catch (err) {
+			this.logger.error(`Cache GET error ${key}: ${(err as Error).message}`);
 			return null;
 		}
 	}
 
-	/**
-	 * Set value in cache
-	 */
-	async set<T>(key: string, value: T, ttl: number = 300): Promise<void> {
+	async set<T>(key: string, value: T, ttl = 300): Promise<void> {
 		try {
-			await this.cacheManager.set(key, value, ttl * 1000);
-			this.stats.sets += 1;
-			this.logger.debug(`Cache SET: ${key} (TTL: ${ttl}s)`);
-		} catch (error) {
-			this.logger.error(
-				`Cache set error for key ${key}: ${(error as Error).message}`,
+			await this.redis.set(
+				key,
+				JSON.stringify(value),
+				'EX',
+				ttl,
 			);
+			this.stats.sets++;
+			this.logger.debug(`Cache SET: ${key} (${ttl}s)`);
+		} catch (err) {
+			this.logger.error(`Cache SET error ${key}: ${(err as Error).message}`);
 		}
 	}
 
-	/**
-	 * Get from cache or call factory function to populate
-	 */
 	async getOrSet<T>(
 		key: string,
 		factory: () => Promise<T>,
-		ttl: number = 300,
+		ttl = 300,
 	): Promise<T> {
-		try {
-			const cached = await this.get<T>(key);
+		const lockKey = `${key}:lock`;
+		const lockTtlMs = 5000;
+		const lockValue = randomUUID();
 
-			if (cached) {
-				return cached;
+		const cached = await this.get<T>(key);
+		if (cached !== null && cached !== undefined) {
+			return cached;
+		}
+
+		const locked = await this.redis.set(
+			lockKey,
+			lockValue,
+			'PX',
+			lockTtlMs,
+			'NX',
+		);
+
+		if (!locked) {
+			await new Promise((r) => setTimeout(r, 50));
+			const retry = await this.get<T>(key);
+			if (retry !== null && retry !== undefined) {
+				return retry;
 			}
+		}
 
-			this.logger.debug(`Cache MISS - computing: ${key}`);
+		try {
+			this.logger.debug(`Cache MISS – computing: ${key}`);
 			const value = await factory();
 			await this.set(key, value, ttl);
 			return value;
-		} catch (error) {
-			this.logger.error(
-				`Get or set error for key ${key}: ${(error as Error).message}`,
-			);
-			throw error;
+		} finally {
+			const current = await this.redis.get(lockKey);
+			if (current === lockValue) {
+				await this.redis.del(lockKey);
+			}
 		}
 	}
 
-	/**
-	 * Delete a key from cache
-	 */
 	async delete(key: string): Promise<void> {
 		try {
-			await this.cacheManager.del(key);
-			this.stats.deletes += 1;
+			await this.redis.del(key);
+			this.stats.deletes++;
 			this.logger.debug(`Cache DELETE: ${key}`);
-		} catch (error) {
-			this.logger.error(
-				`Cache delete error for key ${key}: ${(error as Error).message}`,
-			);
+		} catch (err) {
+			this.logger.error(`Cache DELETE error ${key}: ${(err as Error).message}`);
 		}
 	}
 
-	/**
-	 * Delete all keys matching a pattern
-	 */
 	async deletePattern(pattern: string): Promise<void> {
-		this.logger.debug(`Cache deletePattern for key ${pattern}`);
+		this.logger.debug(`Cache deletePattern: ${pattern}`);
 
-		try {
-			let cursor = '0';
-			let deleted = 0;
+		let cursor = '0';
+		let deleted = 0;
 
-			do {
-				const [nextCursor, keys] = await this.redis.scan(
-					cursor,
-					'MATCH',
-					pattern,
-					'COUNT',
-					100,
-				);
-
-				cursor = nextCursor;
-
-				if (keys.length > 0) {
-					await this.redis.del(...keys);
-					deleted += keys.length;
-				}
-			} while (cursor !== '0');
-
-			this.stats.deletes += deleted;
-			this.logger.debug(`Cache DELETE PATTERN: ${pattern} (${deleted} keys)`);
-		} catch (error) {
-			this.logger.error(
-				`Cache delete pattern error for ${pattern}: ${(error as Error).message}`,
+		do {
+			const [nextCursor, keys] = await this.redis.scan(
+				cursor,
+				'MATCH',
+				pattern,
+				'COUNT',
+				100,
 			);
-		}
+
+			cursor = nextCursor;
+
+			if (keys.length > 0) {
+
+				await this.redis.del(...keys);
+				deleted += keys.length;
+			}
+		} while (cursor !== '0');
+
+		this.stats.deletes += deleted;
+		this.logger.debug(`Cache DELETE PATTERN: ${pattern} (${deleted})`);
 	}
 
-	/**
-	 * Get cache statistics
-	 */
-	getStats(): CacheStats {
-		return {
-			...this.stats,
-			total: this.stats.hits + this.stats.misses,
-		};
-	}
-
-	/**
-	 * Get health status
-	 */
-	getHealthStatus(): any {
-		return {
-			status: 'healthy',
-			stats: this.getStats(),
-			uptime: process.uptime(),
-		};
-	}
-
-	/**
-	 * Update hit rate percentage
-	 */
-	private updateHitRate(): void {
+	private updateStats() {
 		const total = this.stats.hits + this.stats.misses;
-		const hitRate =
-			total > 0 ? ((this.stats.hits / total) * 100).toFixed(2) : '0.00';
-		this.stats.hitRate = hitRate + '%';
+		this.stats.hitRate =
+			total > 0 ? ((this.stats.hits / total) * 100).toFixed(2) + '%' : '0.00%';
 	}
 
-	/**
-	 * Check if key exists in cache
-	 */
 	async exists(key: string): Promise<boolean> {
 		try {
 			const value = await this.cacheManager.get(key);
-			return value !== undefined && value !== null;
-		} catch (error) {
-			this.logger.error(
-				`Cache exists error for key ${key}: ${(error as Error).message}`,
-			);
+			return value !== null && value !== undefined;
+		} catch {
 			return false;
 		}
 	}
